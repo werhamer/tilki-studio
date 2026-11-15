@@ -1,0 +1,7 @@
+node_modules/
+release/
+src/renderer/dist/
+test-out/
+*.log
+.DS_Store
+Thumbs.db

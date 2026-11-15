@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="56 64 400 400" width="400" height="400">
+  <defs>
+    <linearGradient id="fur" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff9a3d"/>
+      <stop offset="1" stop-color="#ff6a0f"/>
+    </linearGradient>
+  </defs>
+  <!-- kulaklar -->
+  <path d="M96 76 L236 172 L122 272 Z" fill="#e85d04"/>
+  <path d="M416 76 L276 172 L390 272 Z" fill="#d95303"/>
+  <path d="M126 122 L196 172 L138 226 Z" fill="#3a1c08"/>
+  <path d="M386 122 L316 172 L374 226 Z" fill="#331806"/>
+  <!-- yüz -->
+  <path d="M256 160 L394 238 L424 300 L256 458 L88 300 L118 238 Z" fill="url(#fur)"/>
+  <path d="M256 160 L394 238 L424 300 L256 458 Z" fill="#000" opacity="0.1"/>
+  <!-- yanaklar -->
+  <path d="M88 300 L214 310 L256 458 Z" fill="#fff4e6"/>
+  <path d="M424 300 L298 310 L256 458 Z" fill="#f7e6d2"/>
+  <!-- gözler -->
+  <ellipse cx="190" cy="270" rx="18" ry="11" transform="rotate(20 190 270)" fill="#1a0f08"/>
+  <ellipse cx="322" cy="270" rx="18" ry="11" transform="rotate(-20 322 270)" fill="#1a0f08"/>
+  <circle cx="184" cy="266" r="4" fill="#fff" opacity="0.9"/>
+  <circle cx="316" cy="266" r="4" fill="#fff" opacity="0.9"/>
+  <!-- burun -->
+  <path d="M230 418 Q256 408 282 418 L260 454 Q256 460 252 454 Z" fill="#1a0f08"/>
+</svg>

@@ -1,0 +1,35 @@
+name: Hata bildirimi / Bug report
+description: Bir şey beklendiği gibi çalışmıyor / Something isn't working
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: Ne oldu? / What happened?
+      description: Ne yaptın, ne bekliyordun, ne oldu? / What did you do, what did you expect, what happened?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Tilki Studio sürümü / version
+      description: Ayarlar sayfasının en altında yazar / Shown at the bottom of Settings
+      placeholder: v0.1.1
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: Ekran kartı / GPU
+      placeholder: NVIDIA RTX 3060 / AMD RX 6600 / Intel UHD 630
+  - type: input
+    id: os
+    attributes:
+      label: Windows sürümü / Windows version
+      placeholder: Windows 11 23H2
+  - type: textarea
+    id: settings
+    attributes:
+      label: Ayarlar / Settings
+      description: Dosya türü, kodek, çözünürlük, kare hızı / File type, codec, resolution, frame rate
+      placeholder: MP4 · H.264 · 1080p · 60 fps

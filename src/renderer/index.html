@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: tilki:; media-src 'self' tilki: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self'">
+  <title>Tilki Studio</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="titlebar">
+    <div class="brand">
+      <img src="assets/logo.svg" alt="" width="24" height="24">
+      <span class="brand-name">Tilki Studio</span>
+      <span class="brand-by">by sibertilki</span>
+    </div>
+    <div class="title-status" id="titleStatus" hidden>
+      <span class="dot"></span><span id="titleStatusText">REC</span>
+    </div>
+  </header>
+
+  <div class="shell">
+    <nav class="rail">
+      <button class="rail-btn active" data-view="studio"><i data-icon="studio"></i><span data-i18n="nav.studio"></span></button>
+      <button class="rail-btn" data-view="library"><i data-icon="library"></i><span data-i18n="nav.library"></span></button>
+      <button class="rail-btn" data-view="settings"><i data-icon="settings"></i><span data-i18n="nav.settings"></span></button>
+      <div class="rail-spacer"></div>
+      <div class="rail-version" id="railVersion"></div>
+    </nav>
+
+    <main class="views">
+      <!-- ============================== STÜDYO ============================== -->
+      <section class="view active" id="view-studio">
+        <div class="studio-main">
+          <div class="stage" id="stage">
+            <div class="stage-frame" id="stageFrame">
+              <canvas id="preview" width="1280" height="720"></canvas>
+              <div class="crop-layer" id="cropLayer" hidden>
+                <div class="crop-box" id="cropBox">
+                  <span class="crop-size" id="cropSize"></span>
+                  <i class="crop-handle nw" data-handle="nw"></i>
+                  <i class="crop-handle ne" data-handle="ne"></i>
+                  <i class="crop-handle sw" data-handle="sw"></i>
+                  <i class="crop-handle se" data-handle="se"></i>
+                </div>
+              </div>
+            </div>
+            <div class="stage-empty" id="stageEmpty">
+              <img src="assets/logo.svg" alt="" width="72" height="72">
+              <h2 data-i18n="stage.emptyTitle"></h2>
+              <p data-i18n="stage.emptyText"></p>
+              <button class="btn primary" id="emptyPick"><i data-icon="monitor"></i><span data-i18n="source.pick"></span></button>
+            </div>
+            <div class="stage-badges">
+              <div class="badge rec" id="recBadge" hidden><span class="dot"></span><span id="recBadgeText">REC</span></div>
+              <div class="badge" id="dimBadge" hidden></div>
+            </div>
+            <div class="crop-bar" id="cropBar" hidden>
+              <span data-i18n="crop.hint"></span>
+              <button class="btn ghost small" id="cropReset" data-i18n="crop.full"></button>
+              <button class="btn ghost small" id="cropCancel" data-i18n="common.cancel"></button>
+              <button class="btn primary small" id="cropApply" data-i18n="common.apply"></button>
+            </div>
+            <div class="countdown" id="countdown" hidden></div>
+          </div>
+
+          <div class="transport">
+            <div class="transport-left">
+              <div class="timer" id="timer">00:00:00</div>
+              <div class="state" id="stateLabel"></div>
+            </div>
+            <div class="transport-center">
+              <button class="round-btn" id="btnShot" data-i18n-title="action.screenshot"><i data-icon="image"></i></button>
+              <button class="round-btn" id="btnPause" data-i18n-title="action.pause" disabled><i data-icon="pause"></i></button>
+              <button class="rec-btn" id="btnRec" data-i18n-title="action.record"><span class="rec-core"></span></button>
+              <button class="round-btn" id="btnReplaySave" data-i18n-title="action.replaySave" disabled><i data-icon="replay"></i></button>
+              <button class="round-btn" id="btnFolder" data-i18n-title="action.openFolder"><i data-icon="folder"></i></button>
+            </div>
+            <div class="transport-right">
+              <div class="chip" id="chipFormat"></div>
+              <div class="chip" id="chipEncoder" hidden></div>
+              <div class="chip" id="chipRate" hidden></div>
+              <div class="chip" id="chipSize" hidden></div>
+              <div class="chip warn" id="chipDropped" hidden></div>
+            </div>
+          </div>
+        </div>
+
+        <aside class="panel">
+          <div class="card">
+            <div class="card-head">
+              <i data-icon="monitor"></i><h3 data-i18n="source.title"></h3>
+            </div>
+            <button class="source-row" id="sourceRow">
+              <span class="source-thumb" id="sourceThumb"></span>
+              <span class="source-meta">
+                <span class="source-name" id="sourceName" data-i18n="source.none"></span>
+                <span class="source-sub" id="sourceSub"></span>
+              </span>
+            </button>
+            <div class="row-buttons">
+              <button class="btn" id="btnPick"><i data-icon="monitor"></i><span data-i18n="source.change"></span></button>
+              <button class="btn" id="btnCrop"><i data-icon="crop"></i><span data-i18n="crop.select"></span></button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <i data-icon="camera"></i><h3 data-i18n="camera.title"></h3>
+              <label class="switch"><input type="checkbox" id="camEnabled"><span></span></label>
+            </div>
+            <div class="card-body" id="camBody" hidden>
+              <select id="camDevice" class="select"></select>
+              <div class="field">
+                <span class="field-label" data-i18n="camera.shape"></span>
+                <div class="segmented" id="camShape">
+                  <button data-value="circle" data-i18n="camera.circle"></button>
+                  <button data-value="rounded" data-i18n="camera.square"></button>
+                  <button data-value="wide" data-i18n="camera.wide"></button>
+                </div>
+              </div>
+              <div class="field">
+                <span class="field-label" data-i18n="camera.size"></span>
+                <input type="range" id="camSize" min="10" max="60" step="1">
+              </div>
+              <label class="check"><input type="checkbox" id="camMirror"><span data-i18n="camera.mirror"></span></label>
+              <p class="hint" data-i18n="camera.hint"></p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <i data-icon="volume"></i><h3 data-i18n="audio.title"></h3>
+            </div>
+            <div class="strip" id="stripSystem">
+              <button class="icon-btn" id="sysMute"><i data-icon="volume"></i></button>
+              <div class="strip-main">
+                <div class="strip-top"><span data-i18n="audio.system"></span><span class="strip-val" id="sysVal"></span></div>
+                <div class="meter"><div class="meter-fill" id="sysMeter"></div></div>
+                <input type="range" id="sysVolume" min="0" max="150" step="1">
+              </div>
+            </div>
+            <div class="strip" id="stripMic">
+              <button class="icon-btn" id="micMute"><i data-icon="mic"></i></button>
+              <div class="strip-main">
+                <div class="strip-top"><span data-i18n="audio.mic"></span><span class="strip-val" id="micVal"></span></div>
+                <div class="meter"><div class="meter-fill" id="micMeter"></div></div>
+                <input type="range" id="micVolume" min="0" max="150" step="1">
+              </div>
+            </div>
+            <select id="micDevice" class="select"></select>
+            <label class="check"><input type="checkbox" id="micNoise"><span data-i18n="audio.noise"></span></label>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <i data-icon="replay"></i><h3 data-i18n="replay.title"></h3>
+              <label class="switch"><input type="checkbox" id="replayEnabled"><span></span></label>
+            </div>
+            <p class="hint" id="replayHint" data-i18n="replay.hint"></p>
+            <div class="card-body" id="replayBody" hidden>
+              <div class="field">
+                <span class="field-label" data-i18n="replay.length"></span>
+                <div class="segmented" id="replaySeconds">
+                  <button data-value="15">15 sn</button>
+                  <button data-value="30">30 sn</button>
+                  <button data-value="60">60 sn</button>
+                  <button data-value="120">2 dk</button>
+                </div>
+              </div>
+              <div class="replay-progress"><div id="replayFill"></div></div>
+              <button class="btn primary wide" id="btnReplaySave2"><i data-icon="download"></i><span data-i18n="replay.save"></span></button>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <!-- ============================== KÜTÜPHANE ============================== -->
+      <section class="view" id="view-library">
+        <div class="page-head">
+          <div>
+            <h1 data-i18n="library.title"></h1>
+            <p class="page-sub" id="libraryDir"></p>
+          </div>
+          <div class="page-actions">
+            <button class="btn" id="libRefresh"><i data-icon="refresh"></i><span data-i18n="common.refresh"></span></button>
+            <button class="btn" id="libOpenDir"><i data-icon="folder"></i><span data-i18n="action.openFolder"></span></button>
+          </div>
+        </div>
+        <div class="library-grid" id="libraryGrid"></div>
+        <div class="library-empty" id="libraryEmpty" hidden>
+          <i data-icon="library"></i>
+          <h2 data-i18n="library.emptyTitle"></h2>
+          <p data-i18n="library.emptyText"></p>
+        </div>
+      </section>
+
+      <!-- ============================== AYARLAR ============================== -->
+      <section class="view" id="view-settings">
+        <div class="page-head">
+          <div>
+            <h1 data-i18n="settings.title"></h1>
+            <p class="page-sub" data-i18n="settings.sub"></p>
+          </div>
+        </div>
+        <div class="settings-lock" id="settingsLock" hidden>
+          <i data-icon="info"></i><span data-i18n="settings.locked"></span>
+        </div>
+        <div class="settings-grid">
+          <div class="card settings-card" data-lockable>
+            <div class="card-head"><i data-icon="studio"></i><h3 data-i18n="settings.video"></h3></div>
+            <div class="setting">
+              <div><b data-i18n="settings.resolution"></b><small data-i18n="settings.resolutionHint"></small></div>
+              <select class="select" id="setResolution"></select>
+            </div>
+            <div class="setting">
+              <div><b data-i18n="settings.fps"></b><small data-i18n="settings.fpsHint"></small></div>
+              <div class="segmented" id="setFps">
+                <button data-value="30">30</button><button data-value="60">60</button><button data-value="120">120</button>
+              </div>
+            </div>
+            <div class="setting">
+              <div><b data-i18n="settings.quality"></b><small id="qualityHint"></small></div>
+              <div class="segmented" id="setQuality">
+                <button data-value="low" data-i18n="quality.low"></button>
+                <button data-value="medium" data-i18n="quality.medium"></button>
+                <button data-value="high" data-i18n="quality.high"></button>
+                <button data-value="ultra" data-i18n="quality.ultra"></button>
+              </div>
+            </div>
+            <div class="setting">
+              <div><b data-i18n="settings.codec"></b><small id="codecHint"></small></div>
+              <select class="select" id="setCodec"></select>
+            </div>
+            <div class="setting">
+              <div><b data-i18n="settings.container"></b><small data-i18n="settings.containerHint"></small></div>
+              <div class="segmented" id="setContainer">
+                <button data-value="mp4">MP4</button><button data-value="mkv">MKV</button><button data-value="webm">WebM</button>
+              </div>
+            </div>
+            <div class="setting">
+              <div><b data-i18n="settings.crashSafe"></b><small data-i18n="settings.crashSafeHint"></small></div>
+              <label class="switch"><input type="checkbox" id="setCrashSafe"><span></span></label>
+            </div>
+          </div>
+
+          <div class="card settings-card" data-lockable>
+            <div class="card-head"><i data-icon="volume"></i><h3 data-i18n="settings.audio"></h3></div>
+            <div class="setting">
+              <div><b data-i18n="settings.audioBitrate"></b><small data-i18n="settings.audioBitrateHint"></small></div>
+              <div class="segmented" id="setAudioBitrate">
+                <button data-value="128">128</button><button data-value="192">192</button><button data-value="320">320</button>
+              </div>
+            </div>
+            <div class="setting">
+              <div><b data-i18n="settings.separate"></b><small data-i18n="settings.separateHint"></small></div>
+              <label class="switch"><input type="checkbox" id="setSeparate"><span></span></label>
+            </div>
+          </div>
+
+          <div class="card settings-card">
+            <div class="card-head"><i data-icon="folder"></i><h3 data-i18n="settings.output"></h3></div>
+            <div class="setting">
+              <div><b data-i18n="settings.folder"></b><small id="setFolderPath" class="path"></small></div>
+              <button class="btn" id="setFolderBtn" data-i18n="common.change"></button>
+            </div>
+            <div class="setting">
+              <div><b data-i18n="settings.countdown"></b><small data-i18n="settings.countdownHint"></small></div>
+              <div class="segmented" id="setCountdown">
+                <button data-value="0" data-i18n="common.off"></button><button data-value="3">3 sn</button><button data-value="5">5 sn</button>
+              </div>
+            </div>
+            <div class="setting">
+              <div><b data-i18n="settings.hide"></b><small data-i18n="settings.hideHint"></small></div>
+              <label class="switch"><input type="checkbox" id="setHide"><span></span></label>
+            </div>
+            <div class="setting">
+              <div><b data-i18n="settings.minimize"></b><small data-i18n="settings.minimizeHint"></small></div>
+              <label class="switch"><input type="checkbox" id="setMinimize"><span></span></label>
+            </div>
+          </div>
+
+          <div class="card settings-card">
+            <div class="card-head"><i data-icon="keyboard"></i><h3 data-i18n="settings.hotkeys"></h3></div>
+            <div class="setting"><div><b data-i18n="hotkey.record"></b></div><button class="hotkey" data-hotkey="record"></button></div>
+            <div class="setting"><div><b data-i18n="hotkey.pause"></b></div><button class="hotkey" data-hotkey="pause"></button></div>
+            <div class="setting"><div><b data-i18n="hotkey.replay"></b></div><button class="hotkey" data-hotkey="replay"></button></div>
+            <div class="setting"><div><b data-i18n="hotkey.screenshot"></b></div><button class="hotkey" data-hotkey="screenshot"></button></div>
+            <p class="hint" data-i18n="hotkey.hint"></p>
+          </div>
+
+          <div class="card settings-card">
+            <div class="card-head"><i data-icon="globe"></i><h3 data-i18n="settings.general"></h3></div>
+            <div class="setting">
+              <div><b data-i18n="settings.language"></b></div>
+              <div class="segmented" id="setLanguage">
+                <button data-value="tr">Türkçe</button><button data-value="en">English</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card settings-card about">
+            <img src="assets/logo.svg" alt="" width="56" height="56">
+            <div>
+              <h3>Tilki Studio <span id="aboutVersion"></span></h3>
+              <p data-i18n="about.text"></p>
+              <p class="about-meta" id="aboutMeta"></p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Kaynak seçici -->
+  <div class="modal" id="pickerModal" hidden>
+    <div class="modal-card picker">
+      <div class="modal-head">
+        <h2 data-i18n="picker.title"></h2>
+        <div class="segmented" id="pickerTabs">
+          <button data-value="screen" data-i18n="picker.screens"></button>
+          <button data-value="window" data-i18n="picker.windows"></button>
+        </div>
+        <button class="icon-btn" data-close><i data-icon="x"></i></button>
+      </div>
+      <div class="picker-grid" id="pickerGrid"></div>
+    </div>
+  </div>
+
+  <!-- Oynatıcı -->
+  <div class="modal" id="playerModal" hidden>
+    <div class="modal-card player">
+      <div class="modal-head">
+        <h2 id="playerTitle"></h2>
+        <button class="icon-btn" data-close><i data-icon="x"></i></button>
+      </div>
+      <div class="player-body" id="playerBody"></div>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+  <script src="dist/app.js"></script>
+</body>
+</html>

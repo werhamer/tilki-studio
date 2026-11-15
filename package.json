@@ -1,0 +1,75 @@
+{
+  "name": "tilki-studio",
+  "productName": "Tilki Studio",
+  "version": "0.1.1",
+  "description": "Hızlı, sade ve özgür ekran kaydedici. Aç, kaydet, bitti.",
+  "author": "sibertilki",
+  "license": "MIT",
+  "homepage": "https://github.com/werhamer/tilki-studio#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/werhamer/tilki-studio.git"
+  },
+  "bugs": {
+    "url": "https://github.com/werhamer/tilki-studio/issues"
+  },
+  "keywords": [
+    "screen-recorder",
+    "ekran-kaydedici",
+    "obs-alternative",
+    "electron",
+    "webcodecs",
+    "windows"
+  ],
+  "main": "src/main/main.js",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "start": "node scripts/build.mjs && electron .",
+    "selftest": "node scripts/build.mjs && electron . --selftest",
+    "icons": "electron scripts/make-icons.js",
+    "pack": "node scripts/build.mjs && electron-builder --dir",
+    "dist": "node scripts/build.mjs && electron-builder"
+  },
+  "build": {
+    "appId": "com.sibertilki.tilkistudio",
+    "productName": "Tilki Studio",
+    "copyright": "Copyright © 2026 sibertilki",
+    "files": [
+      "src/main/**/*",
+      "src/renderer/index.html",
+      "src/renderer/styles.css",
+      "src/renderer/dist/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "electronLanguages": [
+      "tr",
+      "en-US"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "TilkiStudio-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "TilkiStudio-Portable-${version}.${ext}"
+    }
+  },
+  "devDependencies": {
+    "electron": "^39.0.0",
+    "electron-builder": "^26.0.0",
+    "esbuild": "^0.25.0",
+    "mediabunny": "^1.66.0"
+  }
+}

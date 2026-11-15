@@ -1,0 +1,360 @@
+// Arayüz metinleri. Yeni dil eklemek için aynı anahtarlarla bir sözlük eklemek yeterli.
+const dict = {
+  tr: {
+    'nav.studio': 'Stüdyo',
+    'nav.library': 'Kayıtlar',
+    'nav.settings': 'Ayarlar',
+
+    'stage.emptyTitle': 'Kaydedilecek bir kaynak seç',
+    'stage.emptyText': 'Bir ekranı ya da tek bir pencereyi seç; gerisi tek tuş.',
+
+    'source.title': 'Kaynak',
+    'source.none': 'Kaynak seçilmedi',
+    'source.pick': 'Kaynak seç',
+    'source.change': 'Değiştir',
+    'source.screen': 'Ekran',
+    'source.window': 'Pencere',
+    'source.ended': 'Kaynak kapandı. Yeni bir kaynak seç.',
+    'source.failed': 'Bu kaynak yakalanamadı.',
+    'source.cropped': 'bölge',
+
+    'crop.select': 'Bölge seç',
+    'crop.hint': 'Kaydedilecek alanı sürükleyerek çiz',
+    'crop.full': 'Tümü',
+
+    'camera.title': 'Kamera',
+    'camera.shape': 'Şekil',
+    'camera.circle': 'Daire',
+    'camera.square': 'Kare',
+    'camera.wide': 'Geniş',
+    'camera.size': 'Boyut',
+    'camera.mirror': 'Aynala',
+    'camera.hint': 'Önizlemede sürükleyerek taşı, tekerlekle boyutlandır.',
+    'camera.none': 'Kamera bulunamadı',
+    'camera.error': 'Kameraya erişilemedi.',
+
+    'audio.title': 'Ses',
+    'audio.system': 'Sistem sesi',
+    'audio.mic': 'Mikrofon',
+    'audio.noise': 'Gürültü azaltma',
+    'audio.default': 'Varsayılan mikrofon',
+    'audio.micError': 'Mikrofona erişilemedi. Windows gizlilik ayarlarını kontrol et.',
+    'audio.noSystem': 'Sistem sesi alınamıyor',
+    'audio.muted': 'Kapalı',
+    'audio.noMic': 'Mikrofon yok',
+
+    'replay.title': 'Anlık tekrar',
+    'replay.hint': 'Arka planda son saniyeleri tutar; güzel an yaşanınca tek tuşla kaydedersin.',
+    'replay.length': 'Süre',
+    'replay.save': 'Son {n} saniyeyi kaydet',
+    'replay.saved': 'Tekrar kaydedildi',
+    'replay.empty': 'Tampon henüz dolmadı, birkaç saniye bekle.',
+    'replay.on': 'Anlık tekrar açık',
+
+    'action.record': 'Kaydı başlat / durdur',
+    'action.pause': 'Duraklat / sürdür',
+    'action.screenshot': 'Ekran görüntüsü al',
+    'action.replaySave': 'Anlık tekrarı kaydet',
+    'action.openFolder': 'Klasörü aç',
+
+    'state.ready': 'Hazır',
+    'state.recording': 'Kaydediliyor',
+    'state.paused': 'Duraklatıldı',
+    'state.saving': 'Kaydediliyor…',
+    'state.starting': 'Başlatılıyor…',
+    'state.noSource': 'Kaynak yok',
+
+    'toast.saved': 'Kayıt tamamlandı',
+    'toast.shot': 'Ekran görüntüsü kaydedildi',
+    'toast.show': 'Göster',
+    'toast.play': 'Oynat',
+    'toast.noSource': 'Önce bir kaynak seç.',
+    'toast.noEncoder': 'Bu ayarlarla çalışan bir video kodlayıcı bulunamadı. Kodeği ya da çözünürlüğü değiştir.',
+    'toast.empty': 'Kayıt çok kısaydı, dosya oluşturulmadı.',
+    'toast.failed': 'Bir şeyler ters gitti',
+    'toast.fatal': 'Kodlayıcı hatası, kayıt durduruldu',
+    'toast.hotkeyFailed': 'Bu kısayol başka bir uygulama tarafından kullanılıyor',
+    'toast.softEncoder': 'Donanım kodlayıcı bulunamadı; işlemci ile kodlanıyor.',
+
+    'library.title': 'Kayıtlar',
+    'library.emptyTitle': 'Henüz kayıt yok',
+    'library.emptyText': 'İlk kaydını aldığında burada görünecek.',
+    'library.play': 'Oynat',
+    'library.reveal': 'Klasörde göster',
+    'library.delete': 'Çöp kutusuna taşı',
+    'library.deleted': 'Çöp kutusuna taşındı',
+    'library.external': 'Varsayılan oynatıcıda aç',
+
+    'settings.title': 'Ayarlar',
+    'settings.sub': 'Varsayılanlar çoğu kullanım için hazır. İstersen ince ayar yap.',
+    'settings.locked': 'Kayıt ya da anlık tekrar açıkken video ve ses ayarları değiştirilemez.',
+    'settings.video': 'Video',
+    'settings.resolution': 'Çözünürlük',
+    'settings.resolutionHint': 'Kaynak bundan büyükse küçültülür, asla büyütülmez.',
+    'settings.resSource': 'Kaynakla aynı',
+    'settings.fps': 'Kare hızı',
+    'settings.fpsHint': 'Sabit kare hızı; kurgu programlarıyla sorunsuz çalışır.',
+    'settings.quality': 'Kalite',
+    'settings.codec': 'Kodek',
+    'settings.container': 'Dosya türü',
+    'settings.containerHint': 'MP4 her yerde açılır. MKV ani kapanmaya kendiliğinden dayanıklıdır.',
+    'settings.crashSafe': 'Çökmeye dayanıklı kayıt',
+    'settings.crashSafeHint': 'Ani kapanışta dosyaya yazılmış bölümlerin açılabilmesini sağlar. Bazı editörler parçalı MP4 açamaz.',
+    'settings.audio': 'Ses',
+    'settings.audioBitrate': 'Ses kalitesi (kbps)',
+    'settings.audioBitrateHint': 'AAC, 48 kHz stereo.',
+    'settings.separate': 'Ayrı ses kanalları',
+    'settings.separateHint': 'Sistem sesi ve mikrofon dosyaya ayrı izler olarak yazılır; kurguda ayrı ayrı düzenlenir.',
+    'settings.output': 'Kayıt',
+    'settings.folder': 'Kayıt klasörü',
+    'settings.countdown': 'Geri sayım',
+    'settings.countdownHint': 'Kayıt başlamadan önce hazırlanma süresi.',
+    'settings.hide': 'Tilki Studio’yu kayıtta gizle',
+    'settings.hideHint': 'Tam ekran kaydederken bu pencere videoda görünmez.',
+    'settings.minimize': 'Kayıt başlayınca küçült',
+    'settings.minimizeHint': 'Pencere görev çubuğuna iner; kısayollarla kontrol edersin.',
+    'settings.hotkeys': 'Kısayollar',
+    'settings.general': 'Genel',
+    'settings.language': 'Dil',
+
+    'hotkey.record': 'Kaydı başlat / durdur',
+    'hotkey.pause': 'Duraklat / sürdür',
+    'hotkey.replay': 'Anlık tekrarı kaydet',
+    'hotkey.screenshot': 'Ekran görüntüsü',
+    'hotkey.hint': 'Değiştirmek için kısayola tıkla ve yeni tuşlara bas. Esc iptal eder, Backspace kaldırır.',
+    'hotkey.press': 'Tuşlara bas…',
+    'hotkey.none': 'Yok',
+
+    'quality.low': 'Düşük',
+    'quality.medium': 'Orta',
+    'quality.high': 'Yüksek',
+    'quality.ultra': 'Çok yüksek',
+    'quality.estimate': '{width}×{height} · {fps} fps · video yaklaşık {mbps} Mbps · saatte ~{gb} GB',
+
+    'codec.h264': 'H.264 · en uyumlu',
+    'codec.hevc': 'HEVC · küçük dosya',
+    'codec.av1': 'AV1 · en küçük dosya',
+    'codec.vp9': 'VP9',
+    'codec.gpu': 'GPU',
+    'codec.cpu': 'CPU',
+    'codec.unsupported': 'desteklenmiyor',
+    'codec.hintGpu': 'Ekran kartıyla kodlanır; oyun performansını neredeyse etkilemez.',
+    'codec.hintCpu': 'Bu kodek işlemciyle kodlanacak; yüksek çözünürlükte zorlanabilir.',
+
+    'picker.title': 'Ne kaydedilsin?',
+    'picker.screens': 'Ekranlar',
+    'picker.windows': 'Pencereler',
+    'picker.primary': 'Ana ekran',
+    'picker.empty': 'Gösterilecek bir şey yok',
+
+    'about.text': 'Hızlı, sade ve tamamen özgür ekran kaydedici. Reklam yok, filigran yok, hesap yok. MIT lisansıyla açık kaynak.',
+
+    'tray.show': 'Tilki Studio’yu göster',
+    'tray.start': 'Kaydı başlat',
+    'tray.stop': 'Kaydı durdur',
+    'tray.quit': 'Çıkış',
+
+    'common.cancel': 'Vazgeç',
+    'common.apply': 'Uygula',
+    'common.change': 'Değiştir',
+    'common.refresh': 'Yenile',
+    'common.off': 'Kapalı',
+    'unit.sec': 'sn',
+    'unit.min': 'dk',
+    'unit.dropped': '{n} kare atlandı',
+  },
+
+  en: {
+    'nav.studio': 'Studio',
+    'nav.library': 'Recordings',
+    'nav.settings': 'Settings',
+
+    'stage.emptyTitle': 'Pick something to record',
+    'stage.emptyText': 'Choose a screen or a single window. The rest is one button.',
+
+    'source.title': 'Source',
+    'source.none': 'No source selected',
+    'source.pick': 'Pick a source',
+    'source.change': 'Change',
+    'source.screen': 'Screen',
+    'source.window': 'Window',
+    'source.ended': 'The source was closed. Pick a new one.',
+    'source.failed': 'This source could not be captured.',
+    'source.cropped': 'region',
+
+    'crop.select': 'Select region',
+    'crop.hint': 'Drag to draw the area to record',
+    'crop.full': 'Full',
+
+    'camera.title': 'Camera',
+    'camera.shape': 'Shape',
+    'camera.circle': 'Circle',
+    'camera.square': 'Square',
+    'camera.wide': 'Wide',
+    'camera.size': 'Size',
+    'camera.mirror': 'Mirror',
+    'camera.hint': 'Drag it in the preview to move, scroll to resize.',
+    'camera.none': 'No camera found',
+    'camera.error': 'Could not access the camera.',
+
+    'audio.title': 'Audio',
+    'audio.system': 'System audio',
+    'audio.mic': 'Microphone',
+    'audio.noise': 'Noise suppression',
+    'audio.default': 'Default microphone',
+    'audio.micError': 'Could not access the microphone. Check Windows privacy settings.',
+    'audio.noSystem': 'System audio unavailable',
+    'audio.muted': 'Muted',
+    'audio.noMic': 'No microphone',
+
+    'replay.title': 'Instant replay',
+    'replay.hint': 'Keeps the last seconds in the background so you can save a great moment after it happens.',
+    'replay.length': 'Length',
+    'replay.save': 'Save last {n} seconds',
+    'replay.saved': 'Replay saved',
+    'replay.empty': 'The buffer is still filling, wait a few seconds.',
+    'replay.on': 'Instant replay on',
+
+    'action.record': 'Start / stop recording',
+    'action.pause': 'Pause / resume',
+    'action.screenshot': 'Take a screenshot',
+    'action.replaySave': 'Save instant replay',
+    'action.openFolder': 'Open folder',
+
+    'state.ready': 'Ready',
+    'state.recording': 'Recording',
+    'state.paused': 'Paused',
+    'state.saving': 'Saving…',
+    'state.starting': 'Starting…',
+    'state.noSource': 'No source',
+
+    'toast.saved': 'Recording saved',
+    'toast.shot': 'Screenshot saved',
+    'toast.show': 'Show',
+    'toast.play': 'Play',
+    'toast.noSource': 'Pick a source first.',
+    'toast.noEncoder': 'No working video encoder for these settings. Try another codec or resolution.',
+    'toast.empty': 'The recording was too short; no file was created.',
+    'toast.failed': 'Something went wrong',
+    'toast.fatal': 'Encoder error, recording stopped',
+    'toast.hotkeyFailed': 'This shortcut is used by another app',
+    'toast.softEncoder': 'No hardware encoder found; encoding on the CPU.',
+
+    'library.title': 'Recordings',
+    'library.emptyTitle': 'No recordings yet',
+    'library.emptyText': 'Your first recording will show up here.',
+    'library.play': 'Play',
+    'library.reveal': 'Show in folder',
+    'library.delete': 'Move to Recycle Bin',
+    'library.deleted': 'Moved to Recycle Bin',
+    'library.external': 'Open in default player',
+
+    'settings.title': 'Settings',
+    'settings.sub': 'The defaults work for most people. Fine-tune if you like.',
+    'settings.locked': 'Video and audio settings are locked while recording or instant replay is on.',
+    'settings.video': 'Video',
+    'settings.resolution': 'Resolution',
+    'settings.resolutionHint': 'Larger sources are scaled down, never up.',
+    'settings.resSource': 'Same as source',
+    'settings.fps': 'Frame rate',
+    'settings.fpsHint': 'Constant frame rate; plays nicely with video editors.',
+    'settings.quality': 'Quality',
+    'settings.codec': 'Codec',
+    'settings.container': 'File type',
+    'settings.containerHint': 'MP4 opens everywhere. MKV survives abrupt shutdowns by design.',
+    'settings.crashSafe': 'Crash-safe recording',
+    'settings.crashSafeHint': 'Parts already written can be played after an abrupt shutdown. Some editors cannot open fragmented MP4.',
+    'settings.audio': 'Audio',
+    'settings.audioBitrate': 'Audio quality (kbps)',
+    'settings.audioBitrateHint': 'AAC, 48 kHz stereo.',
+    'settings.separate': 'Separate audio tracks',
+    'settings.separateHint': 'System audio and microphone are written as separate tracks so you can edit them independently.',
+    'settings.output': 'Recording',
+    'settings.folder': 'Output folder',
+    'settings.countdown': 'Countdown',
+    'settings.countdownHint': 'Time to get ready before recording starts.',
+    'settings.hide': 'Hide Tilki Studio from recordings',
+    'settings.hideHint': 'This window will not appear in full-screen recordings.',
+    'settings.minimize': 'Minimize when recording starts',
+    'settings.minimizeHint': 'The window drops to the taskbar; control it with shortcuts.',
+    'settings.hotkeys': 'Shortcuts',
+    'settings.general': 'General',
+    'settings.language': 'Language',
+
+    'hotkey.record': 'Start / stop recording',
+    'hotkey.pause': 'Pause / resume',
+    'hotkey.replay': 'Save instant replay',
+    'hotkey.screenshot': 'Screenshot',
+    'hotkey.hint': 'Click a shortcut and press the new keys. Esc cancels, Backspace clears.',
+    'hotkey.press': 'Press keys…',
+    'hotkey.none': 'None',
+
+    'quality.low': 'Low',
+    'quality.medium': 'Medium',
+    'quality.high': 'High',
+    'quality.ultra': 'Ultra',
+    'quality.estimate': '{width}×{height} · {fps} fps · about {mbps} Mbps for video · ~{gb} GB per hour',
+
+    'codec.h264': 'H.264 · most compatible',
+    'codec.hevc': 'HEVC · smaller files',
+    'codec.av1': 'AV1 · smallest files',
+    'codec.vp9': 'VP9',
+    'codec.gpu': 'GPU',
+    'codec.cpu': 'CPU',
+    'codec.unsupported': 'unsupported',
+    'codec.hintGpu': 'Encoded on your graphics card; barely touches game performance.',
+    'codec.hintCpu': 'This codec will be encoded on the CPU and may struggle at high resolutions.',
+
+    'picker.title': 'What should be recorded?',
+    'picker.screens': 'Screens',
+    'picker.windows': 'Windows',
+    'picker.primary': 'Primary',
+    'picker.empty': 'Nothing to show',
+
+    'about.text': 'A fast, simple and completely free screen recorder. No ads, no watermark, no account. Open source under the MIT license.',
+
+    'tray.show': 'Show Tilki Studio',
+    'tray.start': 'Start recording',
+    'tray.stop': 'Stop recording',
+    'tray.quit': 'Quit',
+
+    'common.cancel': 'Cancel',
+    'common.apply': 'Apply',
+    'common.change': 'Change',
+    'common.refresh': 'Refresh',
+    'common.off': 'Off',
+    'unit.sec': 's',
+    'unit.min': 'min',
+    'unit.dropped': '{n} frames dropped',
+  },
+};
+
+let lang = 'tr';
+
+export function resolveLang(setting, locale) {
+  if (setting === 'tr' || setting === 'en') return setting;
+  return String(locale || '').toLowerCase().startsWith('tr') ? 'tr' : 'en';
+}
+
+export function setLang(next) {
+  lang = dict[next] ? next : 'en';
+  document.documentElement.lang = lang;
+}
+
+export function getLang() {
+  return lang;
+}
+
+export function t(key, vars) {
+  let text = dict[lang][key] ?? dict.en[key] ?? key;
+  if (vars) for (const [name, value] of Object.entries(vars)) text = text.replace(`{${name}}`, value);
+  return text;
+}
+
+export function applyI18n(root = document) {
+  for (const el of root.querySelectorAll('[data-i18n]')) el.textContent = t(el.dataset.i18n);
+  for (const el of root.querySelectorAll('[data-i18n-title]')) {
+    el.title = t(el.dataset.i18nTitle);
+    el.setAttribute('aria-label', el.title);
+  }
+}
