@@ -130,6 +130,7 @@ function errorToast(err) {
   ui.lastError = code;
   const known = {
     'no-video-encoder': 'toast.noEncoder',
+    'start-timeout': 'toast.startTimeout',
     'empty-recording': 'toast.empty',
     'no-source': 'toast.noSource',
     'replay-empty': 'replay.empty',

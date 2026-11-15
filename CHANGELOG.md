@@ -1,5 +1,14 @@
 # Değişiklik günlüğü
 
+## 0.1.2
+
+- **Düzeltme: kayıt "Başlatılıyor…" ekranında takılı kalabiliyordu.** Ekran kartı sürücüsü
+  kodek sorgusuna yanıt vermediğinde uygulama sonsuza kadar bekliyordu. Artık her sorgu
+  süreyle sınırlı; kayıt başlatılamazsa ne yapılacağını söyleyen bir uyarı çıkıyor.
+- Arayüz süreci çökerse pencere donmuş kalmıyor, kendini yeniden yüklüyor.
+- Kapanış yarım kalırsa arka planda penceresiz bir Tilki Studio kalmıyor; uygulama yeniden
+  açıldığında pencere her zaman geliyor.
+
 ## 0.1.1
 
 - **Kayıt anında başlıyor:** video kodlayıcı arka planda hazır bekler; kayıt tuşuna

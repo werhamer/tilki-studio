@@ -14,6 +14,11 @@ import { camRect, RESOLUTIONS, targetBitrate } from './geometry.js';
 
 const post = (type, data = {}, transfer = []) => self.postMessage({ type, ...data }, transfer);
 
+if (self.name === 'hang') {
+  // Yalnızca otomatik testte: yanıt vermeyen ekran kartı sürücüsünü taklit et.
+  VideoEncoder.isConfigSupported = () => new Promise(() => {});
+}
+
 // ------------------------------------------------------------------ durum
 
 let preview = null;
@@ -363,14 +368,26 @@ function videoConfig(codec, str, w, h, fps, bitrate, hw) {
 
 // Adayları sırayla üretir; çağıran ilk çalışan kodlayıcıda durur, böylece
 // kullanılmayacak kodekler boşuna yoklanmaz ve kayıt daha çabuk başlar.
+// Ekran kartı sürücüsü bazen "destekliyor musun?" sorusuna hiç yanıt vermiyor
+// (örneğin GPU başka bir uygulama tarafından kilitlendiğinde). Her sorgu ve
+// aramanın tamamı süreyle sınırlıdır; yanıt gelmezse o seçenek atlanır.
+const QUERY_TIMEOUT = 2500;
+const SEARCH_BUDGET = 15000;
+
 async function* videoCandidates(order, w, h, fps, quality) {
+  const deadline = performance.now() + SEARCH_BUDGET;
   for (const codec of order) {
     const bitrate = targetBitrate(w, h, fps, quality, codec);
     for (const hw of [true, false]) {
       for (const str of codecStrings(codec, w, h, fps)) {
         const cfg = videoConfig(codec, str, w, h, fps, bitrate, hw);
+        if (performance.now() > deadline) return;
         try {
-          const r = await VideoEncoder.isConfigSupported(cfg);
+          const r = await withTimeout(VideoEncoder.isConfigSupported(cfg), QUERY_TIMEOUT);
+          if (r === 'timeout') {
+            post('error', { message: `isConfigSupported zaman aşımı: ${cfg.codec} ${hw ? 'hw' : 'sw'}` });
+            break;
+          }
           if (r.supported) {
             yield { codec, hw, cfg, bitrate };
             break;
@@ -511,8 +528,8 @@ async function pickAudioConfig(order, bitrate) {
       ? { codec: 'mp4a.40.2', sampleRate: 48000, numberOfChannels: 2, bitrate }
       : { codec: 'opus', sampleRate: 48000, numberOfChannels: 2, bitrate: Math.min(bitrate, 256000) };
     try {
-      const r = await AudioEncoder.isConfigSupported(cfg);
-      if (r.supported) return { codec, cfg };
+      const r = await withTimeout(AudioEncoder.isConfigSupported(cfg), QUERY_TIMEOUT);
+      if (r !== 'timeout' && r.supported) return { codec, cfg };
     } catch {}
   }
   return null;

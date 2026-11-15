@@ -238,6 +238,23 @@ function createWindow() {
       if (win && !win.isDestroyed()) win.close();
     }, 10000);
   });
+  win.webContents.on('render-process-gone', (_e, details) => {
+    console.error(`[render-process-gone] ${JSON.stringify(details)}`);
+    // Arayüz çökerse donmuş bir pencere bırakma: yeniden yükle.
+    if (details.reason !== 'clean-exit' && win && !win.isDestroyed()) {
+      appState = { recording: false, paused: false, replay: false };
+      refreshTray();
+      setTimeout(() => win && !win.isDestroyed() && win.reload(), 500);
+    }
+  });
+  win.webContents.on('unresponsive', () => console.error('[unresponsive]'));
+  win.webContents.on('console-message', (event) => {
+    const level = event.level;
+    if (level === 'error' || level === 'warning' || level === 3 || level === 2) {
+      console.error(`[renderer ${level}] ${event.message}`);
+    }
+  });
+
   win.on('closed', () => {
     win = null;
   });
@@ -268,6 +285,12 @@ async function captureViews() {
     ['settings', "document.querySelector('[data-view=settings]').click()"],
   ];
   for (const [name, script] of steps) {
+    if (script === '@crash') {
+      // Arayüz sürecini zorla çökert; pencere kendini yeniden yüklemeli.
+      wc.forcefullyCrashRenderer();
+      await pause(6000);
+      continue;
+    }
     if (script === '@close') {
       // Kullanıcının pencereyi kapatmasını taklit eder ve kapanmasını bekler.
       const closed = new Promise((resolve) => win.once('closed', resolve));
@@ -535,7 +558,10 @@ function registerIpc() {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', showWindow);
+  // Uygulama ikinci kez açılırsa var olan pencereyi öne getir; pencere yoksa
+  // (örneğin önceki kapanış yarım kaldıysa) yenisini aç.
+  app.on('second-instance', () => (win && !win.isDestroyed() ? showWindow() : createWindow()));
+  app.on('child-process-gone', (_e, details) => console.error(`[child-process-gone] ${JSON.stringify(details)}`));
 
   app.whenReady().then(() => {
     app.setAppUserModelId('com.sibertilki.tilkistudio');
@@ -557,7 +583,12 @@ if (!app.requestSingleInstanceLock()) {
     if (SHOTS) captureViews().catch((err) => console.error(err)).finally(() => app.exit(0));
   });
 
-  app.on('window-all-closed', () => app.quit());
+  app.on('window-all-closed', () => {
+    app.quit();
+    // Asılı kalan bir alt süreç (örneğin yanıt vermeyen GPU) kapanışı engellerse
+    // arka planda penceresiz bir Tilki Studio kalmasın.
+    setTimeout(() => app.exit(0), 4000);
+  });
   app.on('will-quit', () => {
     globalShortcut.unregisterAll();
     for (const entry of openFiles.values()) entry.handle.close().catch(() => {});

@@ -54,7 +54,9 @@ export class Engine extends EventTarget {
 
   async init(settings) {
     this.settings = settings;
-    this.worker = new Worker('dist/worker.js');
+    // Test kancası: "hang" adlı worker ekran kartı sorgularının yanıtsız kaldığını taklit eder.
+    const hang = !!(settings.selftest && settings.selftest.hangQueries);
+    this.worker = new Worker('dist/worker.js', { name: hang ? 'hang' : 'tilki' });
     this.worker.onmessage = (event) => this.onWorkerMessage(event.data);
     this.worker.onerror = (event) => this.emit('error', { message: event.message || 'worker' });
 
@@ -404,7 +406,20 @@ export class Engine extends EventTarget {
     this.recordingTransition = true;
     let file;
     try {
-      await this.ensureSession();
+      // Son güvenlik: kodlayıcı hiçbir şekilde hazırlanamazsa kullanıcı sonsuza
+      // kadar "Başlatılıyor…" ekranında kalmasın.
+      let timer;
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('start-timeout')), 25000);
+      });
+      try {
+        await Promise.race([this.ensureSession(), timeout]);
+      } catch (err) {
+        if (err.message === 'start-timeout') this.sessionPromise = null;
+        throw err;
+      } finally {
+        clearTimeout(timer);
+      }
       const container = this.sessionContainer;
       file = await api.openFile({ kind: 'recording', ext: container });
       await this.call('rec-start', {
