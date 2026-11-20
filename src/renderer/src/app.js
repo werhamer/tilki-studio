@@ -1,7 +1,7 @@
 /*
  * Tilki Studio — arayüz
  */
-import { Engine } from './engine.js';
+import { Engine, micNoiseLevel } from './engine.js';
 import { t, setLang, getLang, resolveLang, applyI18n } from './i18n.js';
 import { icon, applyIcons } from './icons.js';
 import { camRect, targetBitrate } from './geometry.js';
@@ -838,7 +838,8 @@ function renderAudioCard() {
   $('micVal').textContent = !mic.enabled
     ? t('audio.muted')
     : engine.micStream ? `${Math.round(mic.volume * 100)}%` : t('audio.noMic');
-  $('micNoise').checked = mic.noiseSuppression;
+  setSegmented($('micNoiseLevel'), micNoiseLevel(mic));
+  $('micEcho').checked = !!mic.echoCancellation;
 }
 
 async function populateDevices() {
@@ -939,8 +940,18 @@ function bindAudio() {
     await save({ mic: { ...settings.mic, deviceId: event.target.value } });
     await engine.refreshMic();
   });
-  $('micNoise').addEventListener('change', async (event) => {
-    await save({ mic: { ...settings.mic, noiseSuppression: event.target.checked } });
+  $('micNoiseLevel').addEventListener('click', async (event) => {
+    const button = event.target.closest('button');
+    if (!button || button.disabled) return;
+    const level = button.dataset.value;
+    setSegmented($('micNoiseLevel'), level);
+    await save({ mic: { ...settings.mic, noiseLevel: level, noiseSuppression: level !== 'off' } });
+    api.log('info', `gürültü engelleme: ${level}`);
+    await engine.refreshMic();
+    renderAudioCard();
+  });
+  $('micEcho').addEventListener('change', async (event) => {
+    await save({ mic: { ...settings.mic, echoCancellation: event.target.checked } });
     await engine.refreshMic();
   });
 }
@@ -1442,6 +1453,10 @@ function bindEngine() {
     notifySystem(t('audio.micRestored'), '');
     renderAudioCard();
   });
+  engine.addEventListener('noise-fallback', () => {
+    api.log('error', 'güçlü gürültü engelleme yüklenemedi, mikrofon engellemesiz çalışıyor');
+    toast({ title: t('audio.noiseFallback'), kind: 'error', timeout: 9000 });
+  });
   engine.addEventListener('mic-fallback', (event) => {
     api.log('info', `seçili mikrofon yok, varsayılan: ${event.detail.label}`);
     toast({ title: t('audio.micFallback'), sub: event.detail.label, kind: 'info', timeout: 8000 });
@@ -1680,6 +1695,7 @@ async function selftest() {
     result.dims = engine.dims;
     result.systemAudio = engine.systemAvailable;
     result.mic = !!engine.micStream;
+    result.micNoise = engine.micNoiseActive;
     result.outputLatencyMs = Math.round((beepCtx.outputLatency || 0) * 1000);
 
     const opts = settings.selftest || {};

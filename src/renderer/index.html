@@ -2,7 +2,7 @@
 <html lang="tr">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: tilki:; media-src 'self' tilki: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: tilki:; media-src 'self' tilki: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'">
   <title>Tilki Studio</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -160,7 +160,16 @@
               </div>
             </div>
             <select id="micDevice" class="select"></select>
-            <label class="check"><input type="checkbox" id="micNoise"><span data-i18n="audio.noise"></span></label>
+            <div class="field">
+              <span class="field-label" data-i18n="audio.noise"></span>
+              <div class="segmented" id="micNoiseLevel">
+                <button data-value="off" data-i18n="audio.noiseOff"></button>
+                <button data-value="standard" data-i18n="audio.noiseStandard"></button>
+                <button data-value="strong" data-i18n="audio.noiseStrong"></button>
+              </div>
+            </div>
+            <label class="check"><input type="checkbox" id="micEcho"><span data-i18n="audio.echo"></span></label>
+            <p class="hint" data-i18n="audio.noiseHint"></p>
           </div>
 
           <div class="card">

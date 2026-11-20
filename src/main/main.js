@@ -37,6 +37,7 @@ const MIME = {
   '.mkv': 'video/x-matroska',
   '.webm': 'video/webm',
   '.m4a': 'audio/mp4',
+  '.wasm': 'application/wasm',
 };
 const VIDEO_EXT = new Set(['.mp4', '.mkv', '.webm']);
 const AUDIO_EXT = new Set(['.m4a']);
@@ -267,7 +268,8 @@ function defaults() {
       screenshot: 'Alt+F12',
     },
     system: { enabled: true, volume: 1 },
-    mic: { enabled: true, deviceId: 'default', volume: 1, noiseSuppression: true },
+    // noiseLevel: 'off' | 'standard' (Chromium) | 'strong' (RNNoise); null = eski noiseSuppression ayarından
+    mic: { enabled: true, deviceId: 'default', volume: 1, noiseSuppression: true, noiseLevel: null, echoCancellation: false },
     camera: { enabled: false, deviceId: '', shape: 'circle', size: 0.28, x: 0.86, y: 0.78, mirror: true },
     lastSourceId: null,
     // 'video': görüntü + ses, 'audio': yalnızca ses (.m4a)

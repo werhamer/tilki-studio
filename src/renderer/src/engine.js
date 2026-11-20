@@ -3,7 +3,15 @@
  * Ekranı, kamerayı ve sesi yakalar; kareleri worker'a aktarır; ses mikserini yönetir.
  */
 
+import { RnnoiseWorkletNode, loadRnnoise } from '@sapphi-red/web-noise-suppressor';
+
 const api = window.tilki;
+
+// Mikrofon gürültü engelleme seviyesi. Eski sürümlerde yalnızca açık/kapalı vardı.
+export function micNoiseLevel(mic) {
+  if (mic.noiseLevel === 'off' || mic.noiseLevel === 'standard' || mic.noiseLevel === 'strong') return mic.noiseLevel;
+  return mic.noiseSuppression === false ? 'off' : 'standard';
+}
 
 const CODEC_ORDER = {
   mp4: { video: ['h264', 'hevc', 'av1', 'vp9'], audio: ['aac', 'opus'] },
@@ -280,10 +288,34 @@ export class Engine extends EventTarget {
     }, 3000);
   }
 
+  // RNNoise (güçlü gürültü engelleme) bir kez yüklenir. Yüklenemezse null döner ve
+  // mikrofon normal gürültü engellemeyle çalışmaya devam eder; kayıt gecikmez.
+  loadRnnoise() {
+    if (!this.rnnoiseReady) {
+      this.rnnoiseReady = (async () => {
+        const wasm = await loadRnnoise({ url: 'dist/rnnoise/rnnoise.wasm', simdUrl: 'dist/rnnoise/rnnoise_simd.wasm' });
+        await this.audio.audioWorklet.addModule('dist/rnnoise/workletProcessor.js');
+        return wasm;
+      })().catch((err) => {
+        console.error('[rnnoise]', err);
+        this.rnnoiseReady = null;
+        return null;
+      });
+    }
+    return this.rnnoiseReady;
+  }
+
   async openMic({ quiet = false } = {}) {
     const cfg = this.settings.mic;
     if (this.mic.node) this.mic.node.disconnect();
     this.mic.node = null;
+    if (this.mic.fx) {
+      this.mic.fx.disconnect();
+      try {
+        this.mic.fx.destroy();
+      } catch {}
+      this.mic.fx = null;
+    }
     stopStream(this.micStream);
     this.micStream = null;
     if (!cfg.enabled) {
@@ -291,15 +323,19 @@ export class Engine extends EventTarget {
       this.micLost = false;
       return true;
     }
+    const level = micNoiseLevel(cfg);
+    // Güçlü seviyede RNNoise tek başına çalışır (Chromium'unkiyle üst üste binince ses bozulur).
     const constraints = (deviceId) => ({
       audio: {
         deviceId: deviceId && deviceId !== 'default' ? { exact: deviceId } : undefined,
-        echoCancellation: false,
+        echoCancellation: !!cfg.echoCancellation,
         autoGainControl: false,
-        noiseSuppression: !!cfg.noiseSuppression,
+        noiseSuppression: level === 'standard',
         channelCount: { ideal: 2 },
       },
     });
+    // wasm'ı mikrofon açılırken paralel yükle; açılış gecikmesin.
+    const rnnoise = level === 'strong' ? this.loadRnnoise() : null;
     try {
       let stream;
       let fallback = false;
@@ -314,7 +350,21 @@ export class Engine extends EventTarget {
       }
       this.micStream = stream;
       this.mic.node = this.audio.createMediaStreamSource(stream);
-      this.mic.node.connect(this.mic.gain);
+      this.micNoiseActive = level === 'standard' ? 'standard' : 'off';
+      const wasm = rnnoise ? await rnnoise : null;
+      if (wasm && this.micStream === stream) {
+        try {
+          this.mic.fx = new RnnoiseWorkletNode(this.audio, { maxChannels: 2, wasmBinary: wasm });
+          this.mic.node.connect(this.mic.fx);
+          this.mic.fx.connect(this.mic.gain);
+          this.micNoiseActive = 'strong';
+        } catch (err) {
+          console.error('[rnnoise]', err);
+          this.mic.fx = null;
+        }
+      }
+      if (!this.mic.fx) this.mic.node.connect(this.mic.gain);
+      if (level === 'strong' && this.micNoiseActive !== 'strong') this.emit('noise-fallback', {});
       const track = stream.getAudioTracks()[0];
       if (track) {
         track.addEventListener('ended', () => {

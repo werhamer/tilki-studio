@@ -21,6 +21,15 @@ Tilki Studio uses the following open-source components.
 - Mediabunny is bundled unmodified into the recording engine bundle. Its source code
   is available at the address above and on npm under the terms of MPL-2.0.
 
+## web-noise-suppressor (RNNoise)
+
+- Lisans / License: MIT (web-noise-suppressor), BSD-3-Clause (RNNoise)
+- Kaynak / Source: https://github.com/sapphi-red/web-noise-suppressor ,
+  https://github.com/xiph/rnnoise
+- Mikrofon için "Güçlü" gürültü engelleme seviyesinde kullanılır; değiştirilmeden
+  `src/renderer/dist/rnnoise/` altına kopyalanır.
+- Used for the "Strong" microphone noise suppression level; copied unmodified.
+
 ## Lisans uyumu / License compatibility
 
 Tilki Studio GPL-3.0 ile lisanslanmıştır. MPL-2.0 (Mediabunny) ve MIT (Electron) lisansları

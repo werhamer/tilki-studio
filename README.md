@@ -50,7 +50,8 @@ basarsın, kayıt başlar. İnce ayar isteyenler için ayarlar bir tık ötede.
 | 🎬 **Tek tuşla kayıt** | Tam ekran, tek pencere ya da fareyle çizdiğin bir bölge. Küçültülmüş pencereler de listelenir; seçince açılıp kaydedilir |
 | ⚡ **Ekran kartıyla kodlama** | H.264 / HEVC / AV1, kartın hangisini destekliyorsa. Donanım yoksa kendiliğinden işlemciye geçer |
 | 🎞️ **Sabit kare hızı** | 30 / 60 / 120 fps. Kurgu programlarında ses kayması olmaz |
-| 🔊 **Sistem sesi + mikrofon** | Mikrofon seçimi, canlı seviye göstergeleri, ayrı ses düzeyleri, gürültü azaltma. İstersen sistem sesini kapatıp yalnızca mikrofonu kaydet |
+| 🔊 **Sistem sesi + mikrofon** | Mikrofon seçimi, canlı seviye göstergeleri, ayrı ses düzeyleri. İstersen sistem sesini kapatıp yalnızca mikrofonu kaydet |
+| 🤫 **Gürültü engelleme** | Kapalı / Normal / **Güçlü** (yapay zekâ tabanlı RNNoise: fan, klavye ve uğultuyu bastırır, konuşmayı korur). İstersen yankı engelleme |
 | 🎙️ **Sadece ses kaydı** | Görüntüsüz kayıt: seslendirme ya da yorum için mikrofon (istersen sistem sesiyle) her yerde açılan `.m4a` dosyasına yazılır; duraklat / sürdür dahil |
 | 🎚️ **Ayrı ses kanalları** | Sistem sesi ve mikrofon dosyaya iki ayrı iz olarak yazılır, kurguda ayrı düzenlenir |
 | 📷 **Kamera kutusu** | Daire, kare ya da geniş. Önizlemede sürükle, fare tekerleğiyle büyüt |
@@ -307,6 +308,8 @@ Open it, press the red button, done.
 - **Constant frame rate**: 30 / 60 / 120 fps, editor-friendly, no audio drift
 - **System audio + microphone**: microphone picker, live meters, per-source volume, noise
   suppression, optionally written as **separate tracks**; mute system audio to record the mic only
+- **Noise suppression**: Off / Normal / **Strong** (AI-based RNNoise that removes fans, keyboard
+  and hum while keeping your voice), plus optional echo cancellation
 - **Audio-only recording**: record voice-over or commentary without video to a universal `.m4a`
   file (with or without system audio), pause / resume included
 - **Webcam overlay**: circle, square or wide; drag it in the preview, scroll to resize

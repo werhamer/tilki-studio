@@ -5,6 +5,9 @@
 - **Düzeltme: küçültülmüş pencereler kaynak listesinde çıkmıyordu.** Pencere sekmesi,
   pencereler açık olsa bile simge durumundaysa "Gösterilecek bir şey yok" diyordu. Artık
   küçültülmüş pencereler de listelenir; seçilince pencere açılır ve yakalanır.
+- **Yeni: Güçlü gürültü engelleme.** Mikrofon için Kapalı / Normal / Güçlü seçimi. Güçlü
+  seviye RNNoise (wasm) kullanır; testte uğultu ~48 dB bastırıldı, konuşma düzeyi değişmedi.
+  İsteğe bağlı yankı engelleme eklendi.
 - **Yeni: Sadece ses kaydı.** Ses kartındaki "Kayıt türü"nden görüntüsüz kayıt seçilebilir;
   mikrofon (ve istenirse sistem sesi) ayrı ses düzeyleriyle `.m4a` dosyasına yazılır.
   Duraklat / sürdür, ayrı ses kanalları ve kütüphanede oynatma desteklenir.

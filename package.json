@@ -73,6 +73,7 @@
     }
   },
   "devDependencies": {
+    "@sapphi-red/web-noise-suppressor": "0.4.1",
     "electron": "^39.0.0",
     "electron-builder": "^26.0.0",
     "esbuild": "^0.25.0",
