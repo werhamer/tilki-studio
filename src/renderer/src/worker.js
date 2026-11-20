@@ -265,7 +265,7 @@ function tick(time) {
     layoutDirty = false;
     previewDirty = true;
   }
-  if (encoding) encodeFrame(s, time, rect);
+  if (encoding && s.venc) encodeFrame(s, time, rect);
   if (previewDirty && time - lastPreview >= PREVIEW_INTERVAL - 2) {
     if (!rect && !dirty) compose();
     drawPreview(rect);
@@ -577,11 +577,18 @@ async function openSession(msg, request) {
 
   try {
     const audioSupported = msg.audio.length ? pickAudioConfig(msg.audioOrder, msg.audioBitrate) : null;
-    const { video, prepared } = await claimVideoEncoder(request);
-    if (!video) throw new Error('no-video-encoder');
+    // Sadece ses kaydı: video kodlayıcı hiç açılmaz.
+    const { video, prepared } = msg.audioOnly ? { video: null, prepared: false } : await claimVideoEncoder(request);
+    if (!video && !msg.audioOnly) throw new Error('no-video-encoder');
+    if (msg.audioOnly && !msg.audio.length) throw new Error('nothing-to-record');
+    s.audioOnly = !!msg.audioOnly;
+    if (s.audioOnly) {
+      s.width = 0;
+      s.height = 0;
+    }
     s.video = video;
-    s.venc = video.encoder;
-    s.vConfig = video.decoderConfig;
+    s.venc = video ? video.encoder : null;
+    s.vConfig = video ? video.decoderConfig : null;
     s.timing.videoPrepared = prepared;
     s.timing.videoReady = Math.round(performance.now() - s.timing.start);
 
@@ -609,7 +616,7 @@ async function openSession(msg, request) {
     });
 
     s.t0 = performance.now();
-    video.owner = s;
+    if (video) video.owner = s;
     session = s;
     msg.audio.forEach((input, index) => pumpAudio(s, s.audio[index], input.readable));
     updateEncoding();
@@ -628,9 +635,10 @@ function sessionInfo() {
     width: s.width,
     height: s.height,
     fps: s.fps,
-    videoCodec: s.video.codec,
-    hardware: s.video.hw,
-    videoBitrate: s.video.bitrate,
+    videoCodec: s.video ? s.video.codec : null,
+    hardware: s.video ? s.video.hw : null,
+    videoBitrate: s.video ? s.video.bitrate : 0,
+    audioOnly: !!s.audioOnly,
     audioCodec: s.aCodec,
     timing: s.timing,
   };
@@ -650,7 +658,7 @@ async function stopSession() {
     } catch {}
   }
   try {
-    s.venc.close();
+    if (s.venc) s.venc.close();
   } catch {}
   updateOutSize();
 }
@@ -792,6 +800,10 @@ class Sink {
     this.aStarted = aSources.map(() => false);
     this.aLast = aSources.map(() => -1);
     this.pendingAudio = [];
+    // Görüntüsüz (yalnızca ses) kayıt: anahtar kare beklenmez, zaman ilk ses paketinden başlar.
+    this.audioOnly = !vSource;
+    if (this.audioOnly) this.waitKey = false;
+    this.resumeGap = false;
   }
 
   enqueue(fn) {
@@ -825,6 +837,23 @@ class Sink {
 
   pushAudio(index, pkt) {
     if (this.paused) return;
+    if (this.audioOnly) {
+      if (this.base === null) this.base = pkt.timestamp;
+      if (this.resumeGap) {
+        // Duraklatmadan sonra: kodlayıcının içinde kalmış, duraklatmadan hemen önceki
+        // paketler önce gelir (zamanları kesintisiz). İlk gerçek sıçramada aradaki
+        // süreyi kayıttan çıkar.
+        const gap = pkt.timestamp - this.pauseAt;
+        if (gap > 0.1) {
+          this.pausedTotal += gap;
+          this.resumeGap = false;
+        } else {
+          this.pauseAt = Math.max(this.pauseAt, pkt.timestamp + pkt.duration);
+          if (++this.resumeSeen > 100) this.resumeGap = false;
+        }
+      }
+      this.lastEnd = Math.max(this.lastEnd, pkt.timestamp + pkt.duration);
+    }
     if (this.waitKey) {
       // İlk anahtar kare gelene kadar ses bekletilir ki baştaki ses kaybolmasın.
       if (this.base === null && this.pendingAudio.length < 600) this.pendingAudio.push([index, pkt]);
@@ -835,6 +864,7 @@ class Sink {
     this.aLast[index] = ts + pkt.duration * 0.5;
     const meta = this.aStarted[index] ? undefined : { decoderConfig: this.s.audio[index].config };
     this.aStarted[index] = true;
+    if (this.audioOnly) this.duration = Math.max(this.duration, ts + pkt.duration);
     const out = pkt.clone({ timestamp: ts });
     this.enqueue(() => this.aSources[index].add(out, meta));
   }
@@ -848,6 +878,11 @@ class Sink {
   resume() {
     if (!this.paused) return;
     this.paused = false;
+    if (this.audioOnly) {
+      this.resumeGap = true;
+      this.resumeSeen = 0;
+      return;
+    }
     this.waitKey = true;
     this.s.forceKey = true;
   }
@@ -860,7 +895,7 @@ class Sink {
       await withTimeout(this.output.finalize().catch(() => {}), 5000);
       throw this.failed;
     }
-    if (!this.vStarted) {
+    if (!this.vStarted && !(this.audioOnly && this.aStarted.some(Boolean))) {
       await this.output.cancel().catch(() => {});
       throw new Error('empty-recording');
     }
@@ -872,18 +907,22 @@ async function createSink(s, fileId, container, crashSafe) {
   let format;
   // MKV kümeler halinde yazıldığı için kesintiden sonra zaten okunabilir. appendOnly
   // kullanılmaz: o modda normal biten kayda bile süre ve arama dizini yazılmıyor.
-  if (container === 'mkv') format = new MkvOutputFormat();
+  if (container === 'm4a') format = new Mp4OutputFormat({ fastStart: false });
+  else if (container === 'mkv') format = new MkvOutputFormat();
   else if (container === 'webm') format = new WebMOutputFormat();
   else format = new Mp4OutputFormat({ fastStart: crashSafe ? 'fragmented' : false });
 
   const file = makeFile(fileId);
-  const streaming = container !== 'mp4' || crashSafe;
+  const streaming = (container !== 'mp4' && container !== 'm4a') || crashSafe;
   const output = new Output({
     format,
     target: new StreamTarget(file.writable, streaming ? {} : { chunked: true, chunkSize: 2 * 1024 * 1024 }),
   });
-  const vSource = new EncodedVideoPacketSource(MB_VIDEO[s.video.codec]);
-  output.addVideoTrack(vSource, { frameRate: s.fps });
+  let vSource = null;
+  if (s.video) {
+    vSource = new EncodedVideoPacketSource(MB_VIDEO[s.video.codec]);
+    output.addVideoTrack(vSource, { frameRate: s.fps });
+  }
   const aSources = s.audio.map((track) => {
     const source = new EncodedAudioPacketSource(s.aCodec);
     output.addAudioTrack(source, { name: track.name });
@@ -895,7 +934,7 @@ async function createSink(s, fileId, container, crashSafe) {
 
 async function flushEncoders(s) {
   const jobs = [];
-  if (s.venc.state === 'configured') jobs.push(s.venc.flush());
+  if (s.venc && s.venc.state === 'configured') jobs.push(s.venc.flush());
   for (const a of s.audio) if (a.enc.state === 'configured') jobs.push(a.enc.flush());
   await withTimeout(Promise.allSettled(jobs), 4000);
   s.forceKey = true;
@@ -993,7 +1032,8 @@ function startStats() {
       stats.direct = s.direct;
       stats.frames = s.frames;
       stats.maxLate = Math.round(s.maxLate);
-      stats.queue = s.venc.encodeQueueSize;
+      stats.queue = s.venc ? s.venc.encodeQueueSize : 0;
+      stats.audioOnly = !!s.audioOnly;
       statsLast = { time: now, frames: s.frames, bytes: s.bytes };
     } else {
       statsLast = { time: now, frames: 0, bytes: 0 };

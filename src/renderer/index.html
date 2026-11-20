@@ -50,6 +50,11 @@
               <p data-i18n="stage.emptyText"></p>
               <button class="btn primary" id="emptyPick"><i data-icon="monitor"></i><span data-i18n="source.pick"></span></button>
             </div>
+            <div class="stage-audio" id="stageAudio" hidden>
+              <i data-icon="mic"></i>
+              <b data-i18n="mode.stageTitle"></b>
+              <span data-i18n="mode.stageText"></span>
+            </div>
             <div class="stage-badges">
               <div class="badge rec" id="recBadge" hidden><span class="dot"></span><span id="recBadgeText">REC</span></div>
               <div class="badge" id="dimBadge" hidden></div>
@@ -130,6 +135,13 @@
           <div class="card">
             <div class="card-head">
               <i data-icon="volume"></i><h3 data-i18n="audio.title"></h3>
+            </div>
+            <div class="field">
+              <span class="field-label" data-i18n="mode.label"></span>
+              <div class="segmented" id="recMode">
+                <button data-value="video" data-i18n="mode.video"></button>
+                <button data-value="audio" data-i18n="mode.audio"></button>
+              </div>
             </div>
             <div class="strip" id="stripSystem">
               <button class="icon-btn" id="sysMute"><i data-icon="volume"></i></button>

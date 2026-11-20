@@ -2,6 +2,12 @@
 
 ## 0.1.3
 
+- **Düzeltme: küçültülmüş pencereler kaynak listesinde çıkmıyordu.** Pencere sekmesi,
+  pencereler açık olsa bile simge durumundaysa "Gösterilecek bir şey yok" diyordu. Artık
+  küçültülmüş pencereler de listelenir; seçilince pencere açılır ve yakalanır.
+- **Yeni: Sadece ses kaydı.** Ses kartındaki "Kayıt türü"nden görüntüsüz kayıt seçilebilir;
+  mikrofon (ve istenirse sistem sesi) ayrı ses düzeyleriyle `.m4a` dosyasına yazılır.
+  Duraklat / sürdür, ayrı ses kanalları ve kütüphanede oynatma desteklenir.
 - **Lisans GPL-3.0 oldu** (0.1.2 ve öncesi MIT). "Tilki Studio" adı ve tilki logosu için
   [TRADEMARKS.md](TRADEMARKS.md) eklendi. Hakkında bölümünde Siber Tilki kanal bağlantısı var.
 - **Düzeltme: hata çıkınca kayıt siliniyordu.** Kayıt sırasında yazma ya da kodlayıcı hatası

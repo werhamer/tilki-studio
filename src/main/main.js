@@ -16,6 +16,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const { Readable } = require('node:stream');
+const { execFile } = require('node:child_process');
 const { Store } = require('./store');
 
 const fsp = fs.promises;
@@ -35,8 +36,10 @@ const MIME = {
   '.mp4': 'video/mp4',
   '.mkv': 'video/x-matroska',
   '.webm': 'video/webm',
+  '.m4a': 'audio/mp4',
 };
 const VIDEO_EXT = new Set(['.mp4', '.mkv', '.webm']);
+const AUDIO_EXT = new Set(['.m4a']);
 const IMAGE_EXT = new Set(['.png']);
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -147,6 +150,88 @@ const SETTINGS_PAGES = {
   sound: 'ms-settings:sound',
 };
 
+// ---------------------------------------------------------------- küçültülmüş pencereler
+// Chromium'un pencere listesi (desktopCapturer) simge durumuna küçültülmüş pencereleri
+// hiç döndürmüyor; kullanıcı "pencere açık ama listede yok" diye görüyor. Bu pencereleri
+// Windows API'siyle (PowerShell üzerinden, ek yerel modül gerektirmeden) listeleriz;
+// seçilince pencere geri açılır ve normal yolla yakalanır.
+const WIN_API = `
+using System; using System.Text; using System.Collections.Generic; using System.Runtime.InteropServices;
+public static class TilkiWin {
+  public delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] public static extern int GetWindowTextLengthW(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h, uint cmd);
+  [DllImport("user32.dll")] public static extern int GetWindowLongW(IntPtr h, int i);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int a, out int v, int s);
+  public static List<string> Minimized() {
+    var list = new List<string>();
+    EnumWindows((h, l) => {
+      if (!IsWindowVisible(h) || !IsIconic(h)) return true;
+      if (GetWindow(h, 4) != IntPtr.Zero) return true;
+      if ((GetWindowLongW(h, -20) & 0x80) != 0) return true;
+      int cloaked = 0; DwmGetWindowAttribute(h, 14, out cloaked, 4); if (cloaked != 0) return true;
+      int n = GetWindowTextLengthW(h); if (n <= 0) return true;
+      var sb = new StringBuilder(n + 1); GetWindowTextW(h, sb, n + 1);
+      uint pid; GetWindowThreadProcessId(h, out pid);
+      list.Add(h.ToInt64() + "\t" + pid + "\t" + sb.ToString().Replace("\t", " "));
+      return true;
+    }, IntPtr.Zero);
+    return list;
+  }
+}`;
+
+function runPowerShell(body, timeout = 8000) {
+  const script = `[Console]::OutputEncoding = [Text.Encoding]::UTF8\n$ErrorActionPreference = 'Stop'\n${body}`;
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+  return new Promise((resolve, reject) => {
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
+      { timeout, windowsHide: true, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout, stderr) => (err ? reject(new Error(String(stderr || err.message).slice(0, 400))) : resolve(stdout)));
+  });
+}
+
+async function listMinimizedWindows() {
+  if (process.platform !== 'win32') return [];
+  const body = `Add-Type -TypeDefinition @'\n${WIN_API}\n'@
+foreach ($line in [TilkiWin]::Minimized()) {
+  $parts = $line.Split([char]9, 3)
+  $exe = ''
+  try { $exe = (Get-Process -Id ([int]$parts[1])).Path } catch {}
+  Write-Output ($parts[0] + [char]9 + $parts[1] + [char]9 + $exe + [char]9 + $parts[2])
+}`;
+  const own = new Set(app.getAppMetrics().map((m) => m.pid));
+  const out = await runPowerShell(body);
+  const result = [];
+  for (const line of out.split(/\r?\n/)) {
+    const [hwnd, pid, exe, ...rest] = line.split('\t');
+    const title = rest.join('\t').trim();
+    if (!hwnd || !title || own.has(Number(pid))) continue;
+    let icon = null;
+    if (exe) {
+      try {
+        const image = await app.getFileIcon(exe, { size: 'normal' });
+        if (!image.isEmpty()) icon = image.toDataURL();
+      } catch {}
+    }
+    result.push({ hwnd, title, icon });
+  }
+  return result;
+}
+
+async function restoreWindow(hwnd) {
+  if (!/^\d+$/.test(String(hwnd))) return false;
+  const body = `Add-Type -TypeDefinition @'\n${WIN_API}\n'@
+[void][TilkiWin]::ShowWindow([IntPtr][long]${hwnd}, 9)`;
+  await runPowerShell(body);
+  return true;
+}
+
 let win = null;
 let tray = null;
 let store = null;
@@ -185,6 +270,8 @@ function defaults() {
     mic: { enabled: true, deviceId: 'default', volume: 1, noiseSuppression: true },
     camera: { enabled: false, deviceId: '', shape: 'circle', size: 0.28, x: 0.86, y: 0.78, mirror: true },
     lastSourceId: null,
+    // 'video': görüntü + ses, 'audio': yalnızca ses (.m4a)
+    recordMode: 'video',
     // İzin/klasör kontrol penceresi ilk açılışta bir kez gösterilir.
     permissionsShown: false,
   };
@@ -517,9 +604,27 @@ function registerIpc() {
       });
   });
 
+  ipcMain.handle('sources:minimized', async () => {
+    try {
+      return await listMinimizedWindows();
+    } catch (err) {
+      console.error('[sources:minimized]', err.message);
+      return [];
+    }
+  });
+
+  ipcMain.handle('window:restore', async (_e, hwnd) => {
+    try {
+      return await restoreWindow(hwnd);
+    } catch (err) {
+      console.error('[window:restore]', err.message);
+      return false;
+    }
+  });
+
   // --- dosya yazımı: arayüzdeki muxer parçaları konumlarıyla birlikte gönderir
   ipcMain.handle('file:open', async (_e, { kind, ext }) => {
-    const safeExt = ['mp4', 'mkv', 'webm'].includes(ext) ? ext : 'mp4';
+    const safeExt = ['mp4', 'mkv', 'webm', 'm4a'].includes(ext) ? ext : 'mp4';
     const dir = outputDir();
     let handle;
     let file;
@@ -638,7 +743,7 @@ function registerIpc() {
     const items = [];
     for (const name of names) {
       const ext = path.extname(name).toLowerCase();
-      const kind = VIDEO_EXT.has(ext) ? 'video' : IMAGE_EXT.has(ext) ? 'image' : null;
+      const kind = VIDEO_EXT.has(ext) ? 'video' : AUDIO_EXT.has(ext) ? 'audio' : IMAGE_EXT.has(ext) ? 'image' : null;
       const file = path.join(dir, name);
       if (!kind || busy.has(file)) continue;
       try {

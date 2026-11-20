@@ -147,6 +147,7 @@ const dict = {
     'picker.windows': 'Pencereler',
     'picker.primary': 'Ana ekran',
     'picker.empty': 'Gösterilecek bir şey yok',
+    'picker.minimized': 'Küçültülmüş · seçince açılır',
 
     'about.text': 'Hızlı, sade ve tamamen özgür ekran kaydedici. Reklam yok, filigran yok, hesap yok. GPL-3.0 lisansıyla açık kaynak.',
     'about.madeBy': 'Siber Tilki tarafından yapıldı ·',
@@ -211,6 +212,13 @@ const dict = {
     'audio.micRestored': 'Mikrofon yeniden bağlandı',
     'audio.micFallback': 'Seçili mikrofon bulunamadı, Windows varsayılanı kullanılıyor',
     'audio.micDenied': 'Windows mikrofon erişimini engelliyor',
+    'mode.label': 'Kayıt türü',
+    'mode.video': 'Görüntü + ses',
+    'mode.audio': 'Sadece ses',
+    'mode.stageTitle': 'Sadece ses kaydı',
+    'mode.stageText': 'Görüntü kaydedilmez. Mikrofon (ve açıksa sistem sesi) .m4a dosyasına yazılır; ses düzeylerini sağdan ayarla.',
+    'mode.nothing': 'Kaydedilecek ses yok: mikrofonu ya da sistem sesini aç.',
+    'mode.replayOff': 'Sadece ses modunda anlık tekrar kapatıldı',
   },
 
   en: {
@@ -360,6 +368,7 @@ const dict = {
     'picker.windows': 'Windows',
     'picker.primary': 'Primary',
     'picker.empty': 'Nothing to show',
+    'picker.minimized': 'Minimized · opens when picked',
 
     'about.text': 'A fast, simple and completely free screen recorder. No ads, no watermark, no account. Open source under the GPL-3.0 license.',
     'about.madeBy': 'Made by Siber Tilki ·',
@@ -424,6 +433,13 @@ const dict = {
     'audio.micRestored': 'Microphone reconnected',
     'audio.micFallback': 'The selected microphone was not found; using the Windows default',
     'audio.micDenied': 'Windows blocks microphone access',
+    'mode.label': 'Recording type',
+    'mode.video': 'Video + audio',
+    'mode.audio': 'Audio only',
+    'mode.stageTitle': 'Audio-only recording',
+    'mode.stageText': 'No video is recorded. The microphone (and system audio, if on) is saved as an .m4a file; set the levels on the right.',
+    'mode.nothing': 'Nothing to record: turn on the microphone or system audio.',
+    'mode.replayOff': 'Instant replay was turned off for audio-only mode',
   },
 };
 

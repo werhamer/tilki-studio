@@ -407,7 +407,7 @@ export class Engine extends EventTarget {
   async ensureSession() {
     if (this.sessionClosing) await this.sessionClosing;
     if (this.sessionInfo) return this.sessionInfo;
-    if (!this.screenStream) throw new Error('no-source');
+    if (!this.screenStream && this.settings.recordMode !== 'audio') throw new Error('no-source');
     if (!this.sessionPromise) {
       this.sessionPromise = this.openSession().finally(() => { this.sessionPromise = null; });
     }
@@ -417,7 +417,10 @@ export class Engine extends EventTarget {
   async openSession() {
     this.resumeAudio();
     const s = this.settings;
-    const order = CODEC_ORDER[s.container] || CODEC_ORDER.mp4;
+    const audioOnly = s.recordMode === 'audio';
+    // Sadece ses kaydı her yerde açılan .m4a (AAC) dosyasına yazılır.
+    const container = audioOnly ? 'm4a' : s.container;
+    const order = audioOnly ? CODEC_ORDER.mp4 : CODEC_ORDER[s.container] || CODEC_ORDER.mp4;
     const inputs = s.separateTracks
       ? [['System', this.sysDest], ['Microphone', this.micDest]]
       : [['Audio', this.mixDest]];
@@ -429,14 +432,14 @@ export class Engine extends EventTarget {
     try {
       this.sessionInfo = await this.call(
         'session-start',
-        { audioOrder: order.audio, audioBitrate: s.audioBitrate * 1000, audio },
+        { audioOrder: order.audio, audioBitrate: s.audioBitrate * 1000, audio, audioOnly },
         audio.map((a) => a.readable),
       );
     } catch (err) {
       this.releaseSessionTracks();
       throw err;
     }
-    this.sessionContainer = s.container;
+    this.sessionContainer = container;
     this.emit('session', this.sessionInfo);
     return this.sessionInfo;
   }

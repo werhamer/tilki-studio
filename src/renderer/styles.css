@@ -109,6 +109,17 @@ button:disabled { cursor: default; }
 #view-studio { gap: 0; }
 .studio-main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 16px 0 16px 16px; gap: 14px; }
 
+.stage-audio {
+  position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 6px; text-align: center; padding: 24px;
+  background: rgba(12, 13, 16, 0.82); backdrop-filter: blur(6px);
+}
+.stage-audio .icon { width: 44px; height: 44px; color: var(--accent); margin-bottom: 6px; }
+.stage-audio b { font-size: 18px; font-weight: 650; }
+.stage-audio span { color: var(--muted); max-width: 380px; }
+.lib-thumb .lib-audio { width: 100%; height: 100%; display: grid; place-items: center; background: linear-gradient(135deg, #1c1f27, #2a1a0e); }
+.lib-thumb .lib-audio .icon { width: 42px; height: 42px; color: var(--accent); }
+.player-body audio { width: min(640px, 90%); margin: 40px auto; display: block; }
 .stage {
   flex: 1; min-height: 0; position: relative;
   border-radius: var(--radius);
@@ -499,6 +510,13 @@ input[type='range']:hover::-webkit-slider-thumb { transform: scale(1.15); }
 .modal-head h2 { flex: 1; font-size: 16px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); align-content: start; align-items: start; gap: 14px; padding: 20px 22px 24px; overflow-y: auto; min-height: 220px; }
 .picker-empty { grid-column: 1 / -1; display: grid; place-items: center; color: var(--muted); min-height: 180px; }
+.pick-thumb { position: relative; }
+.pick.minimized .pick-thumb { display: grid; place-items: center; background: var(--surface-2); }
+.pick-min-icon { width: 44px; height: 44px; opacity: 0.9; }
+.pick-min-note {
+  position: absolute; left: 8px; bottom: 8px; padding: 2px 8px; border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55); color: var(--text-2); font-size: 11px;
+}
 .pick {
   display: flex; flex-direction: column; gap: 8px; text-align: left; padding: 8px; border-radius: 12px;
   background: var(--bg-2); border: 1px solid var(--line);
@@ -550,3 +568,6 @@ input[type='range']:hover::-webkit-slider-thumb { transform: scale(1.15); }
 .perm-summary { margin: 0; font-size: 12.5px; color: var(--text-2); }
 .perm-summary.bad { color: var(--warn); }
 .perm-actions { display: flex; justify-content: flex-end; gap: 10px; }
+
+/* Kayıt türü seçicisinde etkin seçenek açıkça görünsün */
+#recMode button.active { background: var(--accent-soft); color: var(--accent-2); box-shadow: inset 0 0 0 1px rgba(255, 122, 26, 0.45); }

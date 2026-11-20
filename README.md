@@ -47,10 +47,11 @@ basarsın, kayıt başlar. İnce ayar isteyenler için ayarlar bir tık ötede.
 
 | | |
 |---|---|
-| 🎬 **Tek tuşla kayıt** | Tam ekran, tek pencere ya da fareyle çizdiğin bir bölge |
+| 🎬 **Tek tuşla kayıt** | Tam ekran, tek pencere ya da fareyle çizdiğin bir bölge. Küçültülmüş pencereler de listelenir; seçince açılıp kaydedilir |
 | ⚡ **Ekran kartıyla kodlama** | H.264 / HEVC / AV1, kartın hangisini destekliyorsa. Donanım yoksa kendiliğinden işlemciye geçer |
 | 🎞️ **Sabit kare hızı** | 30 / 60 / 120 fps. Kurgu programlarında ses kayması olmaz |
-| 🔊 **Sistem sesi + mikrofon** | Canlı seviye göstergeleri, ayrı ses düzeyleri, gürültü azaltma |
+| 🔊 **Sistem sesi + mikrofon** | Mikrofon seçimi, canlı seviye göstergeleri, ayrı ses düzeyleri, gürültü azaltma. İstersen sistem sesini kapatıp yalnızca mikrofonu kaydet |
+| 🎙️ **Sadece ses kaydı** | Görüntüsüz kayıt: seslendirme ya da yorum için mikrofon (istersen sistem sesiyle) her yerde açılan `.m4a` dosyasına yazılır; duraklat / sürdür dahil |
 | 🎚️ **Ayrı ses kanalları** | Sistem sesi ve mikrofon dosyaya iki ayrı iz olarak yazılır, kurguda ayrı düzenlenir |
 | 📷 **Kamera kutusu** | Daire, kare ya da geniş. Önizlemede sürükle, fare tekerleğiyle büyüt |
 | ⏪ **Anlık tekrar** | Arka planda son 15–120 saniyeyi tutar; güzel an yaşandıktan *sonra* tek tuşla kaydet |
@@ -71,8 +72,11 @@ Geri sayım, kayıt başlayınca küçülme, tek tıkla ekran görüntüsü de v
   <img src="docs/library.png" alt="Kayıt kütüphanesi" width="49%">
 </p>
 <p align="center">
-  <img src="docs/settings.png" alt="Ayarlar" width="49%">
+  <img src="docs/audio.png" alt="Sadece ses kaydı" width="49%">
   <img src="docs/permissions.png" alt="İzinler ve kayıt kontrolü" width="49%">
+</p>
+<p align="center">
+  <img src="docs/settings.png" alt="Ayarlar" width="80%">
 </p>
 
 ## Kurulum
@@ -181,6 +185,16 @@ Ayarlar → Kısayollar'dan değiştirebilirsin.
 **Kayıtlar nereye kaydediliyor?**
 Varsayılan olarak `Videolar\Tilki Studio` klasörüne. Ayarlardan değiştirebilirsin.
 
+**Açık bir pencere listede görünmüyor.**
+Simge durumuna küçültülmüş pencereler "Küçültülmüş · seçince açılır" etiketiyle listenin
+sonunda çıkar; seçtiğinde pencere açılır ve kaydedilir. Yönetici olarak çalışan bir
+uygulamanın penceresi, Tilki Studio da yönetici olarak açılmadıkça listede görünmeyebilir.
+
+**Sadece sesimi nasıl kaydederim?**
+Stüdyo'da Ses kartındaki **Kayıt türü → Sadece ses**'i seç. Yalnızca mikrofonu istiyorsan
+sistem sesi düğmesine basıp kapat. Kayıt `.m4a` olarak kaydedilir; "Ayrı ses kanalları"
+açıksa mikrofon ve sistem sesi dosyada iki ayrı iz olur.
+
 **Hangi dosya türünü seçmeliyim?**
 Emin değilsen **MP4**: her yerde açılır. Uzun kayıtlarda elektrik kesintisinden
 korkuyorsan **MKV**: bilgisayar aniden kapansa bile o ana kadarki kayıt kurtulur.
@@ -287,11 +301,14 @@ Open it, press the red button, done.
 
 ### Features
 
-- **One-click recording**: full screen, a single window, or a region you draw
+- **One-click recording**: full screen, a single window, or a region you draw; minimized
+  windows are listed too and are restored when you pick them
 - **GPU encoding**: H.264 / HEVC / AV1, with automatic CPU fallback
 - **Constant frame rate**: 30 / 60 / 120 fps, editor-friendly, no audio drift
-- **System audio + microphone**: live meters, per-source volume, noise suppression,
-  optionally written as **separate tracks**
+- **System audio + microphone**: microphone picker, live meters, per-source volume, noise
+  suppression, optionally written as **separate tracks**; mute system audio to record the mic only
+- **Audio-only recording**: record voice-over or commentary without video to a universal `.m4a`
+  file (with or without system audio), pause / resume included
 - **Webcam overlay**: circle, square or wide; drag it in the preview, scroll to resize
 - **Instant replay**: keeps the last 15–120 seconds so you can save a moment *after* it happens
 - **Never lose a recording**: on a disk or encoder error the part recorded so far is kept,
@@ -306,7 +323,7 @@ Open it, press the red button, done.
 - **No ads, no watermark, no account, no telemetry.** Your recordings stay on your computer.
 
 <p align="center">
-  <img src="docs/replay-en.png" alt="Instant replay" width="49%">
+  <img src="docs/audio-en.png" alt="Audio-only recording" width="49%">
   <img src="docs/permissions-en.png" alt="Permissions and recording check" width="49%">
 </p>
 

@@ -21,6 +21,9 @@ FAKE_DIR = r"C:\Users\sibertilki\Videos\Tilki Studio"
 
 wait = "new Promise(r=>setTimeout(r,{ms}))"
 steps = [
+    # Gizli pencerede CSS geçişleri ilerlemez; görüntüler yarım geçişte kalmasın.
+    ["!notransition", "const st=document.createElement('style');"
+     + "st.textContent='*,*::before,*::after{transition:none!important}';document.head.append(st);true"],
     ["!demo", demo],
     ["!settle", wait.format(ms=1800)],
     ["studio", "1"],
@@ -31,6 +34,10 @@ steps = [
     ["!replay", "document.getElementById('replayEnabled').click();" + wait.format(ms=4000)],
     ["replay", "1"],
     ["!replayoff", "document.getElementById('replayEnabled').click();" + wait.format(ms=800)],
+    ["!audiomode", "document.querySelector('#recMode [data-value=audio]').click();"
+     + "document.querySelectorAll('.toast').forEach(t=>t.remove());" + wait.format(ms=1200)],
+    ["audio", "1"],
+    ["!videomode", "document.querySelector('#recMode [data-value=video]').click();" + wait.format(ms=800)],
     # Kütüphane yolu gerçek klasörü gösterir; görüntüde genel bir yol görünsün.
     ["!lib", f"setInterval(()=>{{const d=document.getElementById('libraryDir');if(d.textContent!=={json.dumps(FAKE_DIR)})d.textContent={json.dumps(FAKE_DIR)};"
      + "document.querySelectorAll('.toast').forEach(t=>t.remove())},50);"

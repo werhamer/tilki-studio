@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('tilki', {
   setSettings: invoke('settings:set'),
 
   listSources: invoke('sources:list'),
+  listMinimizedWindows: invoke('sources:minimized'),
+  restoreWindow: invoke('window:restore'),
 
   openFile: invoke('file:open'),
   writeFile: invoke('file:write'),

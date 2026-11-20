@@ -130,7 +130,7 @@ function notifySystem(title, body) {
 // Ana süreçten gelen hatalar "Error invoking remote method 'x': Error: kod" diye sarılı gelir.
 const ERROR_CODES = [
   'output-blocked', 'disk-full', 'output-missing', 'no-video-encoder', 'start-timeout',
-  'empty-recording', 'no-source', 'replay-empty',
+  'empty-recording', 'no-source', 'replay-empty', 'nothing-to-record',
 ];
 
 function errorCode(err) {
@@ -168,6 +168,7 @@ function errorToast(err) {
     'start-timeout': 'toast.startTimeout',
     'empty-recording': 'toast.empty',
     'no-source': 'toast.noSource',
+    'nothing-to-record': 'mode.nothing',
     'replay-empty': 'replay.empty',
   };
   if (known[code]) toast({ title: t(known[code]), kind: 'error' });
@@ -227,6 +228,7 @@ function render() {
   const recBtn = $('btnRec');
   recBtn.classList.toggle('recording', recording || ui.state === 'countdown');
   recBtn.disabled = busy;
+  $('stage').classList.toggle('audio-mode', settings.recordMode === 'audio');
   $('btnPause').disabled = !recording;
   $('btnPause').querySelector('i').innerHTML = icon(paused ? 'play' : 'pause');
   $('btnPause').classList.toggle('on', paused);
@@ -240,7 +242,7 @@ function render() {
   timer.classList.toggle('live', recording && !paused);
   timer.classList.toggle('paused', paused);
 
-  let label = t(engine.source ? 'state.ready' : 'state.noSource');
+  let label = t(engine.source || settings.recordMode === 'audio' ? 'state.ready' : 'state.noSource');
   if (ui.state === 'starting' || ui.state === 'countdown') label = t('state.starting');
   if (ui.state === 'saving') label = t('state.saving');
   if (recording) label = `${t(paused ? 'state.paused' : 'state.recording')} · ${engine.recFile ? engine.recFile.name : ''}`;
@@ -266,17 +268,30 @@ function render() {
   // sağdaki bilgi etiketleri
   const info = engine.sessionInfo;
   const codecName = { h264: 'H.264', hevc: 'HEVC', av1: 'AV1', vp9: 'VP9', vp8: 'VP8' };
-  $('chipFormat').textContent = `${settings.container.toUpperCase()} · ${settings.fps} fps`;
+  const audioMode = settings.recordMode === 'audio';
+  $('chipFormat').textContent = audioMode
+    ? `M4A · AAC ${settings.audioBitrate} kbps`
+    : `${settings.container.toUpperCase()} · ${settings.fps} fps`;
   const chipEncoder = $('chipEncoder');
-  chipEncoder.hidden = !info;
-  if (info) {
+  chipEncoder.hidden = !info || info.audioOnly;
+  if (info && !info.audioOnly) {
     chipEncoder.textContent = `${codecName[info.videoCodec] || info.videoCodec} · ${info.hardware ? 'GPU' : 'CPU'}`;
     chipEncoder.classList.toggle('good', info.hardware);
     chipEncoder.classList.toggle('warn', !info.hardware);
   }
   const chipRate = $('chipRate');
   chipRate.hidden = !(session && stats && stats.active);
-  if (!chipRate.hidden) chipRate.textContent = `${(stats.bitrate / 1e6).toFixed(1)} Mbps · ${Math.round(stats.fps)} fps`;
+  if (!chipRate.hidden) {
+    chipRate.textContent = stats.audioOnly
+      ? `${Math.round(stats.bitrate / 1e3)} kbps`
+      : `${(stats.bitrate / 1e6).toFixed(1)} Mbps · ${Math.round(stats.fps)} fps`;
+  }
+
+  // kayıt türü
+  $('stageAudio').hidden = !audioMode;
+  setSegmented($('recMode'), settings.recordMode);
+  for (const button of $('recMode').querySelectorAll('button')) button.disabled = session || ui.state !== 'idle';
+  $('replayEnabled').disabled = audioMode;
   const chipSize = $('chipSize');
   chipSize.hidden = !(recording && recStats);
   if (!chipSize.hidden) chipSize.textContent = fmtSize(recStats.bytes);
@@ -342,9 +357,20 @@ async function toggleRecord() {
     return;
   }
   if (ui.state !== 'idle') return;
-  if (!engine.source) {
+  const audioOnly = settings.recordMode === 'audio';
+  if (!engine.source && !audioOnly) {
     toast({ title: t('toast.noSource'), kind: 'info' });
     return;
+  }
+  if (audioOnly) {
+    // Mikrofon açık ama bağlı değilse (izin yeni verildiyse) bir kez daha dene.
+    if (settings.mic.enabled && !engine.micStream) await engine.refreshMic();
+    const micOn = settings.mic.enabled && !!engine.micStream;
+    const sysOn = settings.system.enabled && engine.systemAvailable;
+    if (!micOn && !sysOn) {
+      toast({ title: t('mode.nothing'), kind: 'error', timeout: 8000 });
+      return;
+    }
   }
   if (ui.cropEdit) endCropEdit(false);
   engine.resumeAudio();
@@ -510,6 +536,17 @@ function renderPicker() {
     if (engine.source && engine.source.id === source.id) card.classList.add('current');
     const thumb = el('div', 'pick-thumb');
     if (source.thumbnail) thumb.style.backgroundImage = `url("${source.thumbnail}")`;
+    if (source.minimized) {
+      // Küçültülmüş pencerenin önizlemesi yok: simgesini ve bir not göster.
+      card.classList.add('minimized');
+      if (source.icon) {
+        const big = el('img', 'pick-min-icon');
+        big.src = source.icon;
+        big.alt = '';
+        thumb.append(big);
+      }
+      thumb.append(el('span', 'pick-min-note', t('picker.minimized')));
+    }
     const label = el('div', 'pick-label');
     if (source.icon) {
       const img = el('img');
@@ -523,18 +560,65 @@ function renderPicker() {
     card.append(thumb, label);
     card.addEventListener('click', async () => {
       $('pickerModal').hidden = true;
+      if (source.minimized) {
+        await chooseMinimizedWindow(source, name);
+        return;
+      }
       await chooseSource({ ...source, name });
     });
     grid.append(card);
   });
 }
 
+// Küçültülmüş pencereyi geri aç, Chromium listesinde görününce onu yakala.
+async function chooseMinimizedWindow(source, name) {
+  api.log('info', `küçültülmüş pencere seçildi: ${name}`);
+  await api.restoreWindow(source.hwnd);
+  for (let attempt = 0; attempt < 6; attempt++) {
+    await wait(350);
+    try {
+      sources = await api.listSources();
+    } catch {
+      continue;
+    }
+    const found = sources.find((s) => s.id === source.id)
+      || sources.find((s) => s.type === 'window' && s.id.startsWith(`window:${source.hwnd}:`));
+    if (found) {
+      await chooseSource({ ...found, name: found.name || name });
+      return;
+    }
+  }
+  // Listede hâlâ yoksa doğrudan kimlikle dene.
+  if (!(await chooseSource({ id: source.id, name, type: 'window' }, { quiet: true }))) {
+    toast({ title: t('source.failed'), sub: name, kind: 'error' });
+  }
+}
+
+async function loadSources() {
+  try {
+    sources = await api.listSources();
+  } catch (err) {
+    console.error('Kaynak listesi alınamadı', err);
+    api.log('error', `kaynak listesi alınamadı: ${err && err.message}`);
+  }
+  renderPicker();
+  // Küçültülmüş pencereler ayrı ve biraz daha yavaş gelir; listeyi bekletmeden ekle.
+  const minimized = await api.listMinimizedWindows().catch(() => []);
+  if ($('pickerModal').hidden) return;
+  const known = new Set(sources.map((s) => s.id));
+  for (const m of minimized) {
+    const id = `window:${m.hwnd}:0`;
+    if (known.has(id) || sources.some((s) => s.id.startsWith(`window:${m.hwnd}:`))) continue;
+    sources.push({ id, hwnd: m.hwnd, name: m.title, type: 'window', thumbnail: null, icon: m.icon, minimized: true });
+  }
+  renderPicker();
+}
+
 async function openPicker() {
   if (ui.cropEdit) endCropEdit(false);
   $('pickerModal').hidden = false;
   renderPicker();
-  sources = await api.listSources();
-  renderPicker();
+  await loadSources();
   renderSourceCard();
 }
 
@@ -838,6 +922,19 @@ function bindAudio() {
   };
   volume($('sysVolume'), 'system');
   volume($('micVolume'), 'mic');
+  $('recMode').addEventListener('click', async (event) => {
+    const button = event.target.closest('button');
+    if (!button || button.disabled || engine.sessionActive || ui.state !== 'idle') return;
+    const mode = button.dataset.value;
+    if (mode === settings.recordMode) return;
+    if (mode === 'audio' && engine.replayOn) {
+      await setReplay(false);
+      toast({ title: t('mode.replayOff'), kind: 'info' });
+    }
+    await save({ recordMode: mode });
+    api.log('info', `kayıt türü: ${mode}`);
+    render();
+  });
   $('micDevice').addEventListener('change', async (event) => {
     await save({ mic: { ...settings.mic, deviceId: event.target.value } });
     await engine.refreshMic();
@@ -869,6 +966,12 @@ function openPlayer(item) {
     video.controls = true;
     video.autoplay = true;
     body.append(video);
+  } else if (item.kind === 'audio') {
+    const audio = el('audio');
+    audio.src = item.url;
+    audio.controls = true;
+    audio.autoplay = true;
+    body.append(audio);
   } else {
     const img = el('img');
     img.src = item.url;
@@ -915,6 +1018,21 @@ async function refreshLibrary() {
       });
       thumbObserver.observe(video);
       thumb.append(video, duration);
+    } else if (item.kind === 'audio') {
+      const art = el('div', 'lib-audio');
+      art.innerHTML = `<i class="icon">${icon('mic')}</i>`;
+      const duration = el('span', 'lib-tag');
+      duration.hidden = true;
+      const probe = new Audio();
+      probe.preload = 'metadata';
+      probe.addEventListener('loadedmetadata', () => {
+        if (Number.isFinite(probe.duration)) {
+          duration.textContent = fmtShort(probe.duration);
+          duration.hidden = false;
+        }
+      });
+      probe.src = item.url;
+      thumb.append(art, duration);
     } else {
       const img = el('img');
       img.alt = '';
@@ -925,7 +1043,7 @@ async function refreshLibrary() {
     thumb.append(el('span', 'lib-tag kind', ext));
     const play = el('div', 'lib-play');
     const playIcon = el('span');
-    playIcon.innerHTML = `<i class="icon">${icon(item.kind === 'video' ? 'play' : 'image')}</i>`;
+    playIcon.innerHTML = `<i class="icon">${icon(item.kind === 'image' ? 'image' : 'play')}</i>`;
     play.append(playIcon);
     thumb.append(play);
     thumb.addEventListener('click', () => openPlayer(item));
@@ -1603,6 +1721,10 @@ async function selftest() {
       await wait(600);
       result.cropDims = engine.dims;
     }
+    if (opts.audioOnly) {
+      settings.recordMode = 'audio';
+      engine.settings = settings;
+    }
     await toggleRecord(); // arayüzdeki kayıt düğmesiyle aynı yol
     if (ui.state !== 'recording') throw new Error(`kayıt başlamadı: ${ui.lastError}`);
     result.session = engine.sessionInfo;
@@ -1650,6 +1772,10 @@ async function selftest() {
     await stopRecord();
     result.recording = ui.lastFile;
     if (!result.recording) throw new Error(`kayıt kapanmadı: ${ui.lastError}`);
+    if (opts.audioOnly) {
+      settings.recordMode = 'video';
+      engine.settings = settings;
+    }
 
     await engine.setReplay(true);
     await wait(6000);
