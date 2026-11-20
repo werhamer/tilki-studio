@@ -17,6 +17,12 @@ contextBridge.exposeInMainWorld('tilki', {
   writeFile: invoke('file:write'),
   closeFile: invoke('file:close'),
   abortFile: invoke('file:abort'),
+  salvageFile: invoke('file:salvage'),
+  diskFree: invoke('disk:free'),
+  checkPermissions: invoke('perm:check'),
+  openSystemSettings: invoke('perm:open'),
+  takeRescued: invoke('rescued:take'),
+  log: (level, message) => ipcRenderer.send('log', level, String(message)),
   saveImage: invoke('file:save-image'),
 
   listLibrary: invoke('library:list'),

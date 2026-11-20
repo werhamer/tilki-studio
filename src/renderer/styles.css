@@ -474,6 +474,9 @@ input[type='range']:hover::-webkit-slider-thumb { transform: scale(1.15); }
 .about h3 { font-size: 15px; margin-bottom: 4px; }
 .about h3 span { color: var(--muted); font-family: var(--mono); font-size: 12px; font-weight: 400; margin-left: 4px; }
 .about p { color: var(--text-2); max-width: 640px; }
+.about .about-credit { margin-top: 6px; color: var(--text); }
+.about .about-credit a { color: var(--accent-2); text-decoration: none; font-weight: 600; margin-left: 4px; }
+.about .about-credit a:hover { text-decoration: underline; }
 .about .about-meta { color: var(--muted); font-family: var(--mono); font-size: 11.5px; margin-top: 6px; }
 
 /* ------------------------------------------------------------ pencereler */
@@ -529,3 +532,21 @@ input[type='range']:hover::-webkit-slider-thumb { transform: scale(1.15); }
 .toast-title { font-weight: 600; }
 .toast-sub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .toast .btn { flex: none; }
+
+/* İzinler ve kayıt kontrolü */
+.modal-card.perm { max-width: 620px; }
+.perm-body { padding: 16px 22px 20px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; }
+.perm-list { display: flex; flex-direction: column; gap: 10px; }
+.perm-row { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
+.perm-dot { width: 26px; height: 26px; border-radius: 8px; flex: none; display: grid; place-items: center; background: rgba(61, 220, 151, 0.12); color: var(--ok); }
+.perm-dot .icon { width: 15px; height: 15px; }
+.perm-row.warn .perm-dot { background: rgba(255, 200, 87, 0.12); color: var(--warn); }
+.perm-row.bad .perm-dot { background: var(--rec-soft); color: var(--rec); }
+.perm-row.wait .perm-dot { background: var(--surface-3); color: var(--muted); }
+.perm-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.perm-text b { font-weight: 600; }
+.perm-text small { color: var(--text-2); font-size: 12.5px; line-height: 1.45; user-select: text; }
+.perm-text .perm-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.perm-summary { margin: 0; font-size: 12.5px; color: var(--text-2); }
+.perm-summary.bad { color: var(--warn); }
+.perm-actions { display: flex; justify-content: flex-end; gap: 10px; }

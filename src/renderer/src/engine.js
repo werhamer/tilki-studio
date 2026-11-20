@@ -44,6 +44,10 @@ export class Engine extends EventTarget {
     this.paused = false;
     this.replayOn = false;
     this.busy = false;
+    this.recDuration = 0;
+    this.micLost = false;
+    this.micRetry = null;
+    this.micBusy = null;
   }
 
   emit(type, detail) {
@@ -128,6 +132,7 @@ export class Engine extends EventTarget {
         this.emit('dims', this.dims);
         break;
       case 'stats':
+        if (msg.stats && msg.stats.rec) this.recDuration = msg.stats.rec.duration;
         this.emit('stats', msg.stats);
         break;
       case 'fatal':
@@ -240,13 +245,52 @@ export class Engine extends EventTarget {
     this.mic.gain.gain.setTargetAtTime(mic.enabled ? mic.volume : 0, now, 0.015);
   }
 
-  async refreshMic() {
+  // Aynı anda birden fazla mikrofon yenilemesi çalışmasın (yeniden bağlanma + kullanıcı).
+  refreshMic(opts = {}) {
+    const run = (this.micBusy || Promise.resolve()).then(() => this.openMic(opts));
+    this.micBusy = run.catch(() => false);
+    return run;
+  }
+
+  stopMicRetry() {
+    clearInterval(this.micRetry);
+    this.micRetry = null;
+  }
+
+  // Mikrofon kaydın ortasında koparsa (USB çıktı, sürücü sıfırlandı, başka uygulama
+  // aygıtı kilitledi) sessizce yorumsuz kayıt almak yerine uyar ve geri bağlanmayı dene.
+  onMicLost() {
+    if (this.micLost) return;
+    this.micLost = true;
+    if (this.mic.node) this.mic.node.disconnect();
+    this.mic.node = null;
+    this.micStream = null;
+    this.emit('mic-lost', {});
+    this.stopMicRetry();
+    this.micRetry = setInterval(async () => {
+      if (!this.settings.mic.enabled) {
+        this.stopMicRetry();
+        this.micLost = false;
+        return;
+      }
+      if (await this.refreshMic({ quiet: true })) {
+        this.stopMicRetry();
+        this.emit('mic-restored', {});
+      }
+    }, 3000);
+  }
+
+  async openMic({ quiet = false } = {}) {
     const cfg = this.settings.mic;
     if (this.mic.node) this.mic.node.disconnect();
     this.mic.node = null;
     stopStream(this.micStream);
     this.micStream = null;
-    if (!cfg.enabled) return true;
+    if (!cfg.enabled) {
+      this.stopMicRetry();
+      this.micLost = false;
+      return true;
+    }
     const constraints = (deviceId) => ({
       audio: {
         deviceId: deviceId && deviceId !== 'default' ? { exact: deviceId } : undefined,
@@ -258,18 +302,32 @@ export class Engine extends EventTarget {
     });
     try {
       let stream;
+      let fallback = false;
       try {
         stream = await navigator.mediaDevices.getUserMedia(constraints(cfg.deviceId));
       } catch (err) {
         if (!cfg.deviceId || cfg.deviceId === 'default') throw err;
+        // İzin reddi varsayılan aygıtta da aynı olur; yalnızca aygıt bulunamadıysa dene.
+        if (err && err.name === 'NotAllowedError') throw err;
         stream = await navigator.mediaDevices.getUserMedia(constraints('default'));
+        fallback = true;
       }
       this.micStream = stream;
       this.mic.node = this.audio.createMediaStreamSource(stream);
       this.mic.node.connect(this.mic.gain);
+      const track = stream.getAudioTracks()[0];
+      if (track) {
+        track.addEventListener('ended', () => {
+          if (this.micStream === stream) this.onMicLost();
+        });
+      }
+      this.micLost = false;
+      this.micError = null;
+      if (fallback) this.emit('mic-fallback', { label: track ? track.label : '' });
       return true;
     } catch (err) {
-      this.emit('mic-error', { name: err && err.name, message: String(err && err.message) });
+      this.micError = { name: err && err.name, message: String(err && err.message) };
+      if (!quiet) this.emit('mic-error', this.micError);
       return false;
     }
   }
@@ -469,8 +527,16 @@ export class Engine extends EventTarget {
       await this.endSessionIfIdle();
     }
     if (failure || !result) {
-      await api.abortFile(file.id);
-      throw failure || new Error('empty-recording');
+      const err = failure || new Error('empty-recording');
+      if (err.message === 'empty-recording') {
+        await api.abortFile(file.id);
+        throw err;
+      }
+      // Eskiden burada dosya siliniyordu: bir yazma/kodlayıcı hatası dakikalarca
+      // süren kaydı yok ediyordu. Artık o ana kadar yazılan kısım korunur.
+      const kept = await api.salvageFile(file.id).catch(() => null);
+      if (!kept) throw err;
+      return { ...kept, duration: this.recDuration, partial: true, error: err.message };
     }
     const info = await api.closeFile(file.id);
     return { ...info, duration: result.duration };

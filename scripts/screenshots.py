@@ -38,6 +38,15 @@ steps = [
     ["library", "1"],
     ["!settings", "document.querySelector('[data-view=settings]').click();" + wait.format(ms=3000)],
     ["settings", "1"],
+    # İzin penceresi: gerçek klasör yolu ve mikrofon adı yerine genel değerler gösterilir.
+    ["!perm", "document.getElementById('setPermBtn').click();" + wait.format(ms=3000)],
+    ["!permclean",
+     # Yalnızca klasör satırının başlığında " · " var; yolu genel yolla değiştir.
+     f"document.querySelectorAll('.perm-text b').forEach(b=>{{if(b.textContent.includes(' · '))b.textContent=b.textContent.split(' · ')[0]+' · '+{json.dumps(FAKE_DIR)}}});"
+     + "document.querySelectorAll('.perm-text small').forEach(s=>{const i=s.textContent.indexOf(': ');if(i>0&&s.textContent.length<200)s.textContent=s.textContent.slice(0,i+2)+'USB Mikrofon'});"
+     + "document.querySelectorAll('.toast').forEach(t=>t.remove());true"],
+    ["permissions", "1"],
+    ["!aboutText", "document.querySelector('.about-credit').innerText + ' -> ' + document.querySelector('.about-credit a').href"],
     ["closing", "@close"],
 ]
 
@@ -47,7 +56,7 @@ with tempfile.TemporaryDirectory() as tmp:
         "TILKI_SELFTEST_DIR": tmp,
         "TILKI_TEST_HIDDEN": "1",
         "TILKI_SHOT_STEPS": json.dumps(steps),
-        "TILKI_SELFTEST_SETTINGS": json.dumps({"outputDir": FAKE_DIR, "language": lang}),
+        "TILKI_SELFTEST_SETTINGS": json.dumps({"outputDir": FAKE_DIR, "language": lang, "permissionsShown": True}),
     })
     electron = ROOT / "node_modules" / "electron" / "dist" / "electron.exe"
     shots = Path(tmp) / "shots"

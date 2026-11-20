@@ -291,6 +291,10 @@
           <div class="card settings-card">
             <div class="card-head"><i data-icon="globe"></i><h3 data-i18n="settings.general"></h3></div>
             <div class="setting">
+              <div><b data-i18n="settings.perm"></b><small data-i18n="settings.permHint"></small></div>
+              <button class="btn" id="setPermBtn" data-i18n="settings.permBtn"></button>
+            </div>
+            <div class="setting">
               <div><b data-i18n="settings.language"></b></div>
               <div class="segmented" id="setLanguage">
                 <button data-value="tr">Türkçe</button><button data-value="en">English</button>
@@ -303,6 +307,8 @@
             <div>
               <h3>Tilki Studio <span id="aboutVersion"></span></h3>
               <p data-i18n="about.text"></p>
+              <p class="about-credit"><span data-i18n="about.madeBy"></span>
+                <a href="https://www.youtube.com/@Aianatolyesi" target="_blank" rel="noopener" data-i18n="about.channel"></a></p>
               <p class="about-meta" id="aboutMeta"></p>
             </div>
           </div>
@@ -334,6 +340,25 @@
         <button class="icon-btn" data-close><i data-icon="x"></i></button>
       </div>
       <div class="player-body" id="playerBody"></div>
+    </div>
+  </div>
+
+  <!-- İzinler ve kayıt kontrolü -->
+  <div class="modal" id="permModal" hidden>
+    <div class="modal-card perm">
+      <div class="modal-head">
+        <h2 data-i18n="perm.title"></h2>
+        <button class="icon-btn" data-close><i data-icon="x"></i></button>
+      </div>
+      <div class="perm-body">
+        <p class="hint" data-i18n="perm.sub"></p>
+        <div class="perm-list" id="permList"></div>
+        <p class="perm-summary" id="permSummary"></p>
+        <div class="perm-actions">
+          <button class="btn" id="permRecheck" data-i18n="perm.recheck"></button>
+          <button class="btn primary" id="permDone" data-i18n="perm.done"></button>
+        </div>
+      </div>
     </div>
   </div>
 

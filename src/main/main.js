@@ -1,12 +1,16 @@
 'use strict';
 /*
+ * Tilki Studio — Copyright (C) 2026 Siber Tilki
+ * GNU Genel Kamu Lisansı sürüm 3 (GPL-3.0-only) ile lisanslanmıştır; bkz. LICENSE.
+ * "Tilki Studio" adı ve tilki logosu Siber Tilki'nin markasıdır; bkz. TRADEMARKS.md.
+ *
  * Tilki Studio — ana süreç
  * Pencere, tepsi simgesi, genel kısayollar, kaynak listesi ve dosya yazımı burada.
  * Kayıt motorunun kendisi arayüz tarafında (src/renderer) çalışır.
  */
 const {
   app, BrowserWindow, ipcMain, desktopCapturer, session, globalShortcut,
-  Tray, Menu, shell, dialog, nativeImage, screen, protocol,
+  Tray, Menu, shell, dialog, nativeImage, screen, protocol, systemPreferences,
 } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -53,6 +57,96 @@ if (ISOLATED) {
   app.setPath('userData', path.join(tmp, 'userData'));
 }
 
+// ---------------------------------------------------------------- günlük
+// "Arada bir" çıkan sorunları sonradan görebilmek için hatalar diske de yazılır:
+// %APPDATA%\Tilki Studio\logs\tilki-YYYY-MM-DD.log (son 10 gün tutulur).
+let logStream = null;
+function openLog() {
+  try {
+    const dir = path.join(app.getPath('userData'), 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    const old = fs.readdirSync(dir).filter((n) => /^tilki-.*\.log$/.test(n)).sort();
+    for (const name of old.slice(0, Math.max(0, old.length - 10))) fs.rmSync(path.join(dir, name), { force: true });
+    logStream = fs.createWriteStream(path.join(dir, `tilki-${stamp().slice(0, 10)}.log`), { flags: 'a' });
+  } catch {
+    logStream = null;
+  }
+}
+function log(level, ...parts) {
+  if (!logStream) return;
+  const text = parts
+    .map((p) => (p instanceof Error ? p.stack || p.message : typeof p === 'string' ? p : JSON.stringify(p)))
+    .join(' ');
+  try {
+    logStream.write(`${new Date().toISOString()} [${level}] ${text}\n`);
+  } catch {}
+}
+for (const level of ['log', 'warn', 'error']) {
+  const original = console[level].bind(console);
+  console[level] = (...args) => {
+    original(...args);
+    log(level, ...args);
+  };
+}
+
+// Dosya sistemi hatalarını arayüzün anlayacağı kısa kodlara çevirir.
+// Windows Güvenliği'nin "Denetimli klasör erişimi" engeli EPERM/EACCES olarak gelir.
+function fsErrorCode(err) {
+  const code = err && err.code;
+  if (code === 'EPERM' || code === 'EACCES') return 'output-blocked';
+  if (code === 'ENOSPC') return 'disk-full';
+  if (code === 'ENOENT' || code === 'ENOTDIR') return 'output-missing';
+  return null;
+}
+function rethrowFs(err) {
+  const mapped = fsErrorCode(err);
+  console.error('[fs]', (err && err.code) || '', (err && err.message) || String(err));
+  throw mapped ? new Error(mapped) : err;
+}
+
+async function freeBytes(dir) {
+  try {
+    const st = await fsp.statfs(dir);
+    return st.bavail * st.bsize;
+  } catch {
+    return null;
+  }
+}
+
+const MIN_FREE_TO_START = 1024 ** 3; // 1 GB altında kayıt başlatılmaz
+
+// Kayıt klasörüne gerçekten yazılabiliyor mu? (izin, Denetimli klasör erişimi, disk)
+async function checkOutput() {
+  const dir = outputDir();
+  const result = { dir, ok: false, code: null, free: null };
+  try {
+    await fsp.mkdir(dir, { recursive: true });
+    const probe = path.join(dir, `.tilki-yazma-testi-${process.pid}.tmp`);
+    const handle = await fsp.open(probe, 'w');
+    try {
+      await handle.write(Buffer.from('tilki'));
+    } finally {
+      await handle.close();
+    }
+    await fsp.unlink(probe).catch(() => {});
+    result.ok = true;
+  } catch (err) {
+    result.code = fsErrorCode(err) || String((err && err.code) || err);
+    console.error('[output-check]', dir, (err && err.code) || '', (err && err.message) || '');
+  }
+  result.free = await freeBytes(dir);
+  return result;
+}
+
+// Windows ayar sayfaları (yalnızca bu liste açılabilir).
+const SETTINGS_PAGES = {
+  mic: 'ms-settings:privacy-microphone',
+  camera: 'ms-settings:privacy-webcam',
+  screen: 'ms-settings:privacy-graphicsCaptureProgrammatic',
+  cfa: 'windowsdefender://ransomwareprotection/',
+  sound: 'ms-settings:sound',
+};
+
 let win = null;
 let tray = null;
 let store = null;
@@ -60,6 +154,7 @@ let forceClose = false;
 let appState = { recording: false, paused: false, replay: false };
 let trayLabels = { show: 'Göster', start: 'Kaydı başlat', stop: 'Kaydı durdur', quit: 'Çıkış' };
 const openFiles = new Map();
+const rescuedFiles = []; // arayüz çökerse yarım kalan kayıtlar (yeniden yüklenince bildirilir)
 let fileCounter = 0;
 
 function defaults() {
@@ -90,6 +185,8 @@ function defaults() {
     mic: { enabled: true, deviceId: 'default', volume: 1, noiseSuppression: true },
     camera: { enabled: false, deviceId: '', shape: 'circle', size: 0.28, x: 0.86, y: 0.78, mirror: true },
     lastSourceId: null,
+    // İzin/klasör kontrol penceresi ilk açılışta bir kez gösterilir.
+    permissionsShown: false,
   };
 }
 
@@ -236,12 +333,21 @@ function createWindow() {
     setTimeout(() => {
       forceClose = true;
       if (win && !win.isDestroyed()) win.close();
-    }, 10000);
+    }, 20000);
   });
   win.webContents.on('render-process-gone', (_e, details) => {
     console.error(`[render-process-gone] ${JSON.stringify(details)}`);
     // Arayüz çökerse donmuş bir pencere bırakma: yeniden yükle.
     if (details.reason !== 'clean-exit' && win && !win.isDestroyed()) {
+      // Yarım kalan kayıt dosyaları silinmez; yalnızca kapatılır (MKV yine oynatılabilir).
+      for (const [id, entry] of openFiles) {
+        openFiles.delete(id);
+        entry.handle.close().catch(() => {});
+        console.error(`[render-process-gone] yarım dosya korundu: ${entry.path} (${entry.size} bayt)`);
+        if (entry.kind === 'recording' && entry.size > 0) {
+          rescuedFiles.push({ path: entry.path, name: path.basename(entry.path), size: entry.size });
+        }
+      }
       appState = { recording: false, paused: false, replay: false };
       refreshTray();
       setTimeout(() => win && !win.isDestroyed() && win.reload(), 500);
@@ -415,21 +521,83 @@ function registerIpc() {
   ipcMain.handle('file:open', async (_e, { kind, ext }) => {
     const safeExt = ['mp4', 'mkv', 'webm'].includes(ext) ? ext : 'mp4';
     const dir = outputDir();
-    await fsp.mkdir(dir, { recursive: true });
-    const base = kind === 'replay' ? `Tilki_Replay_${stamp()}` : `Tilki_${stamp()}`;
-    const file = await uniquePath(dir, base, safeExt);
-    const handle = await fsp.open(file, 'w');
+    let handle;
+    let file;
+    try {
+      await fsp.mkdir(dir, { recursive: true });
+      const free = await freeBytes(dir);
+      if (free !== null && free < MIN_FREE_TO_START) throw Object.assign(new Error('disk-full'), { code: 'ENOSPC' });
+      const base = kind === 'replay' ? `Tilki_Replay_${stamp()}` : `Tilki_${stamp()}`;
+      file = await uniquePath(dir, base, safeExt);
+      handle = await fsp.open(file, 'w');
+    } catch (err) {
+      rethrowFs(err);
+    }
     const id = ++fileCounter;
-    openFiles.set(id, { handle, path: file, size: 0 });
+    openFiles.set(id, { handle, path: file, size: 0, kind });
+    console.log(`[file] açıldı ${file}`);
     return { id, path: file, name: path.basename(file) };
   });
 
+  // Test kancası: TILKI_TEST_FAIL_WRITE_AFTER bayttan sonra yazmalar "disk dolu" hatası verir.
+  const failAfter = ISOLATED ? Number(process.env.TILKI_TEST_FAIL_WRITE_AFTER || 0) : 0;
   ipcMain.handle('file:write', async (_e, id, data, position) => {
     const entry = openFiles.get(id);
     if (!entry) throw new Error('Dosya açık değil');
     const buffer = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-    await entry.handle.write(buffer, 0, buffer.length, position);
+    if (failAfter && entry.kind === 'recording' && position + buffer.length > failAfter) {
+      rethrowFs(Object.assign(new Error('test: ENOSPC'), { code: 'ENOSPC' }));
+    }
+    try {
+      await entry.handle.write(buffer, 0, buffer.length, position);
+    } catch (err) {
+      rethrowFs(err);
+    }
     entry.size = Math.max(entry.size, position + buffer.length);
+  });
+
+  // Kayıt bir hatayla bittiğinde dosyayı silmek yerine korur. Yalnızca neredeyse
+  // boş dosyalar (64 KB altı) silinir. Dönen değer: korunan dosya ya da null.
+  ipcMain.handle('file:salvage', async (_e, id) => {
+    const entry = openFiles.get(id);
+    if (!entry) return null;
+    openFiles.delete(id);
+    await entry.handle.close().catch(() => {});
+    if (entry.size < 64 * 1024) {
+      await fsp.unlink(entry.path).catch(() => {});
+      return null;
+    }
+    console.error(`[file] hata sonrası korundu ${entry.path} (${entry.size} bayt)`);
+    return { path: entry.path, name: path.basename(entry.path), size: entry.size };
+  });
+
+  ipcMain.handle('disk:free', async () => freeBytes(outputDir()));
+
+  ipcMain.handle('perm:check', async () => {
+    const status = (type) => {
+      try {
+        return systemPreferences.getMediaAccessStatus(type);
+      } catch {
+        return 'unknown';
+      }
+    };
+    return {
+      mic: status('microphone'),
+      camera: status('camera'),
+      screen: status('screen'),
+      output: await checkOutput(),
+    };
+  });
+
+  ipcMain.handle('perm:open', (_e, key) => {
+    const target = SETTINGS_PAGES[key];
+    if (target) shell.openExternal(target).catch((err) => console.error('[perm:open]', err.message));
+  });
+
+  ipcMain.handle('rescued:take', () => rescuedFiles.splice(0));
+
+  ipcMain.on('log', (_e, level, message) => {
+    if (typeof message === 'string') log(level === 'error' ? 'error' : 'info', `[ui] ${message.slice(0, 2000)}`);
   });
 
   ipcMain.handle('file:close', async (_e, id) => {
@@ -437,6 +605,7 @@ function registerIpc() {
     if (!entry) return null;
     openFiles.delete(id);
     await entry.handle.close();
+    console.log(`[file] kapandı ${entry.path} (${entry.size} bayt)`);
     return { path: entry.path, name: path.basename(entry.path), size: entry.size };
   });
 
@@ -564,6 +733,8 @@ if (!app.requestSingleInstanceLock()) {
   app.on('child-process-gone', (_e, details) => console.error(`[child-process-gone] ${JSON.stringify(details)}`));
 
   app.whenReady().then(() => {
+    openLog();
+    console.log(`[start] Tilki Studio ${app.getVersion()} · Electron ${process.versions.electron} · ${process.execPath}`);
     app.setAppUserModelId('com.sibertilki.tilkistudio');
     store = new Store(path.join(app.getPath('userData'), 'settings.json'), defaults());
     if (ISOLATED) {
@@ -572,9 +743,12 @@ if (!app.requestSingleInstanceLock()) {
       if (process.env.TILKI_SELFTEST_SETTINGS) store.set(JSON.parse(process.env.TILKI_SELFTEST_SETTINGS));
     }
 
+    const allowed = ['media', 'display-capture', 'notifications'];
     session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
-      callback(['media', 'display-capture', 'notifications'].includes(permission));
+      callback(allowed.includes(permission));
     });
+    // navigator.permissions sorguları da aynı yanıtı versin (aksi halde "prompt" görünür).
+    session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowed.includes(permission));
 
     registerProtocol();
     registerIpc();

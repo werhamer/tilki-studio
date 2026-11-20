@@ -1,5 +1,25 @@
 # Değişiklik günlüğü
 
+## 0.1.3
+
+- **Lisans GPL-3.0 oldu** (0.1.2 ve öncesi MIT). "Tilki Studio" adı ve tilki logosu için
+  [TRADEMARKS.md](TRADEMARKS.md) eklendi. Hakkında bölümünde Siber Tilki kanal bağlantısı var.
+- **Düzeltme: hata çıkınca kayıt siliniyordu.** Kayıt sırasında yazma ya da kodlayıcı hatası
+  olursa dosyanın tamamı siliniyordu. Artık o ana kadarki kısım korunuyor ve haber veriliyor.
+- **Kodlayıcı hatasında kayıt durup kalmıyor:** yeni bir dosyada kendiliğinden sürüyor
+  (10 dakikada en fazla 3 kez).
+- **İzin ve klasör kontrolü:** ilk açılışta (ve Ayarlar > Genel > Kontrol et ile) ekran,
+  mikrofon ve kayıt klasörü kontrol edilir. Windows Güvenliği'nin "Denetimli klasör erişimi"
+  yazmayı engellerse ya da Windows mikrofonu kapatırsa ne yapılacağı ve ilgili ayarı açan
+  düğme gösterilir. Eskiden yalnızca "EPERM" gibi anlaşılmaz bir hata çıkıyordu.
+- **Mikrofon koparsa** (USB çıktı, sürücü sıfırlandı) uyarı + bildirim çıkar, mikrofon 3
+  saniyede bir yeniden bağlanmaya çalışılır. Seçili mikrofon yoksa varsayılana geçildiği söylenir.
+- **Ekran yakalaması kayıt ortasında koparsa** aynı ekran kendiliğinden yeniden yakalanır.
+- **Disk alanı:** 1 GB'tan az boş yer varsa kayıt başlamaz; kayıt sırasında 3 GB altında uyarı,
+  600 MB altında kayıt dosya bozulmadan durdurulur.
+- **Hata günlüğü:** `%APPDATA%\Tilki Studio\logs` altına yazılır (son 10 gün).
+- Arayüz çökerse yarım kalan kayıt kapatılır ve korunur; yeniden açılınca haber verilir.
+
 ## 0.1.2
 
 - **Düzeltme: kayıt "Başlatılıyor…" ekranında takılı kalabiliyordu.** Ekran kartı sürücüsü

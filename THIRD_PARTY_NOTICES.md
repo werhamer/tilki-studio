@@ -20,3 +20,10 @@ Tilki Studio uses the following open-source components.
   https://www.mozilla.org/MPL/2.0/
 - Mediabunny is bundled unmodified into the recording engine bundle. Its source code
   is available at the address above and on npm under the terms of MPL-2.0.
+
+## Lisans uyumu / License compatibility
+
+Tilki Studio GPL-3.0 ile lisanslanmıştır. MPL-2.0 (Mediabunny) ve MIT (Electron) lisansları
+GPL-3.0 ile uyumludur; bu bileşenler kendi lisanslarını korur.
+Tilki Studio is licensed under GPL-3.0. The MPL-2.0 (Mediabunny) and MIT (Electron)
+licenses are GPL-3.0 compatible; these components keep their own licenses.

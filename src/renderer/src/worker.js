@@ -854,7 +854,12 @@ class Sink {
 
   async finish() {
     await this.chain;
-    if (this.failed) throw this.failed;
+    if (this.failed) {
+      // Kurtarma: dosyayı yine de düzgün kapatmayı dene (yazma hatasında başarısız
+      // olabilir; o durumda o ana kadar yazılmış MKV kümeleri yine oynatılabilir).
+      await withTimeout(this.output.finalize().catch(() => {}), 5000);
+      throw this.failed;
+    }
     if (!this.vStarted) {
       await this.output.cancel().catch(() => {});
       throw new Error('empty-recording');

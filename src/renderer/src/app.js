@@ -26,6 +26,8 @@ const ui = {
   replayBusy: false,
   pickerTab: 'screen',
   closing: false,
+  lastSource: null,
+  diskWarned: false,
 };
 
 // ------------------------------------------------------------------ yardımcılar
@@ -125,9 +127,42 @@ function notifySystem(title, body) {
   }
 }
 
+// Ana süreçten gelen hatalar "Error invoking remote method 'x': Error: kod" diye sarılı gelir.
+const ERROR_CODES = [
+  'output-blocked', 'disk-full', 'output-missing', 'no-video-encoder', 'start-timeout',
+  'empty-recording', 'no-source', 'replay-empty',
+];
+
+function errorCode(err) {
+  const raw = String((err && err.message) || err);
+  return ERROR_CODES.find((code) => raw.includes(code))
+    || raw.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '');
+}
+
 function errorToast(err) {
-  const code = String((err && err.message) || err);
+  const code = errorCode(err);
   ui.lastError = code;
+  api.log('error', `hata: ${code}`);
+  if (code === 'output-blocked') {
+    toast({
+      title: t('toast.outputBlocked'),
+      sub: t('toast.outputBlockedSub'),
+      kind: 'error',
+      timeout: 15000,
+      action: { label: t('perm.openSecurity'), run: () => api.openSystemSettings('cfa') },
+    });
+    notifySystem(t('toast.outputBlocked'), t('toast.outputBlockedSub'));
+    return;
+  }
+  if (code === 'disk-full') {
+    toast({ title: t('toast.diskFull'), sub: t('toast.diskFullSub'), kind: 'error', timeout: 12000 });
+    notifySystem(t('toast.diskFull'), t('toast.diskFullSub'));
+    return;
+  }
+  if (code === 'output-missing') {
+    toast({ title: t('toast.outputMissing'), kind: 'error', timeout: 12000 });
+    return;
+  }
   const known = {
     'no-video-encoder': 'toast.noEncoder',
     'start-timeout': 'toast.startTimeout',
@@ -331,6 +366,8 @@ async function toggleRecord() {
   try {
     await engine.startRecording();
     ui.state = 'recording';
+    ui.diskWarned = false;
+    api.log('info', `kayıt başladı ${engine.recFile && engine.recFile.name} ${JSON.stringify(engine.sessionInfo)}`);
     if (engine.sessionInfo && !engine.sessionInfo.hardware && !ui.warnedSoft) {
       ui.warnedSoft = true;
       toast({ title: t('toast.softEncoder'), kind: 'info' });
@@ -348,14 +385,29 @@ async function stopRecord() {
   ui.state = 'saving';
   render();
   try {
+    const stats = ui.stats;
     const file = await engine.stopRecording();
     ui.lastFile = file;
-    toast({
-      title: t('toast.saved'),
-      sub: `${file.name} · ${fmtShort(file.duration)} · ${fmtSize(file.size)}`,
-      action: { label: t('toast.show'), run: () => api.revealItem(file.path) },
-    });
-    notifySystem(t('toast.saved'), file.name);
+    const sub = `${file.name} · ${fmtShort(file.duration)} · ${fmtSize(file.size)}`;
+    api.log(file.partial ? 'error' : 'info', `kayıt bitti ${sub}${file.partial ? ` KISMİ: ${file.error}` : ''}`
+      + ` · atlanan kare ${stats ? stats.dropped : '?'}`);
+    if (file.partial) {
+      toast({
+        title: t('toast.partial'),
+        sub,
+        kind: 'error',
+        timeout: 15000,
+        action: { label: t('toast.show'), run: () => api.revealItem(file.path) },
+      });
+      notifySystem(t('toast.partial'), file.name);
+    } else {
+      toast({
+        title: t('toast.saved'),
+        sub,
+        action: { label: t('toast.show'), run: () => api.revealItem(file.path) },
+      });
+      notifySystem(t('toast.saved'), file.name);
+    }
     refreshLibrary();
   } catch (err) {
     errorToast(err);
@@ -828,6 +880,7 @@ function openPlayer(item) {
 
 function closeModals() {
   $('pickerModal').hidden = true;
+  $('permModal').hidden = true;
   if (!$('playerModal').hidden) {
     $('playerModal').hidden = true;
     $('playerBody').textContent = '';
@@ -1109,6 +1162,13 @@ function bindSettings() {
     if (!dir) return;
     await save({ outputDir: dir });
     renderSettings();
+    // Yeni klasöre gerçekten yazılabiliyor mu? Sorun varsa hemen söyle.
+    runPermissionCheck();
+  });
+  $('setPermBtn').addEventListener('click', () => runPermissionCheck({ show: true, retry: true }));
+  $('permRecheck').addEventListener('click', () => runPermissionCheck({ show: true, retry: true }));
+  $('permDone').addEventListener('click', () => {
+    $('permModal').hidden = true;
   });
 
   for (const button of $('setCountdown').querySelectorAll('button')) {
@@ -1203,30 +1263,102 @@ function bindEngine() {
     ui.stats = event.detail;
     render();
   });
-  engine.addEventListener('source', () => {
+  engine.addEventListener('source', (event) => {
+    if (event.detail && event.detail.source) ui.lastSource = event.detail.source;
     renderSourceCard();
     renderAudioCard();
     render();
   });
-  engine.addEventListener('source-ended', () => {
+  engine.addEventListener('source-ended', async () => {
     renderSourceCard();
     renderAudioCard();
     render();
+    const lost = ui.lastSource;
+    api.log('error', `kaynak kapandı: ${lost && lost.id} (durum: ${ui.state})`);
+    if (ui.state === 'recording' && lost) {
+      // Kayıt sürerken ekran yakalaması koptuysa (ekran kartı sürücüsü, çözünürlük
+      // değişimi vb.) aynı kaynağı sessizce yeniden yakalamayı dene.
+      for (const delay of [300, 1500, 4000]) {
+        await wait(delay);
+        if (engine.source || ui.state !== 'recording') break;
+        if (await chooseSource(lost, { quiet: true })) {
+          toast({ title: t('toast.sourceBack'), kind: 'info' });
+          api.log('info', 'kaynak yeniden yakalandı');
+          return;
+        }
+      }
+      if (!engine.source && ui.state === 'recording') {
+        toast({ title: t('toast.sourceLostRec'), kind: 'error', timeout: 15000 });
+        notifySystem(t('toast.sourceLostRec'), lost.name || '');
+      }
+      return;
+    }
     toast({ title: t('source.ended'), kind: 'info' });
   });
   engine.addEventListener('session', () => render());
   engine.addEventListener('mic-error', (event) => {
-    // Mikrofonu olmayan bilgisayarda her açılışta uyarı çıkarmak gereksiz.
-    if (event.detail.name !== 'NotFoundError') toast({ title: t('audio.micError'), kind: 'error', timeout: 7000 });
+    api.log('error', `mikrofon hatası: ${event.detail.name} ${event.detail.message}`);
+    if (event.detail.name === 'NotAllowedError') {
+      toast({
+        title: t('audio.micDenied'),
+        sub: t('perm.micDenied'),
+        kind: 'error',
+        timeout: 15000,
+        action: { label: t('perm.openSettings'), run: () => api.openSystemSettings('mic') },
+      });
+    } else if (event.detail.name !== 'NotFoundError') {
+      // Mikrofonu olmayan bilgisayarda her açılışta uyarı çıkarmak gereksiz.
+      toast({ title: t('audio.micError'), sub: event.detail.name, kind: 'error', timeout: 9000 });
+    }
     renderAudioCard();
+  });
+  engine.addEventListener('mic-lost', () => {
+    api.log('error', `mikrofon koptu (durum: ${ui.state})`);
+    toast({ title: t('audio.micLost'), kind: 'error', timeout: 15000 });
+    notifySystem(t('audio.micLost'), '');
+    renderAudioCard();
+  });
+  engine.addEventListener('mic-restored', () => {
+    api.log('info', 'mikrofon yeniden bağlandı');
+    toast({ title: t('audio.micRestored'), kind: 'ok' });
+    notifySystem(t('audio.micRestored'), '');
+    renderAudioCard();
+  });
+  engine.addEventListener('mic-fallback', (event) => {
+    api.log('info', `seçili mikrofon yok, varsayılan: ${event.detail.label}`);
+    toast({ title: t('audio.micFallback'), sub: event.detail.label, kind: 'info', timeout: 8000 });
   });
   engine.addEventListener('camera-error', () => toast({ title: t('camera.error'), kind: 'error' }));
   engine.addEventListener('error', (event) => console.error('[engine]', event.detail.message));
+  const restarts = [];
   engine.addEventListener('fatal', async (event) => {
-    console.error('[engine fatal]', event.detail.message);
-    toast({ title: t('toast.fatal'), sub: event.detail.message, kind: 'error', timeout: 9000 });
-    if (ui.state === 'recording') await stopRecord();
+    const message = event.detail.message;
+    console.error('[engine fatal]', message);
+    api.log('error', `motor hatası: ${message} (durum: ${ui.state})`);
+    toast({ title: t('toast.fatal'), sub: message, kind: 'error', timeout: 9000 });
+    const wasRecording = ui.state === 'recording';
+    if (wasRecording) await stopRecord();
     if (engine.replayOn) await setReplay(false);
+    // Oyun oynarken uyarıyı görmeyebilirsin: kodlayıcı hatasından sonra kayıt yeni
+    // bir dosyada kendiliğinden sürer (10 dakikada en fazla 3 kez; disk/klasör
+    // hatasında denenmez çünkü yeni dosya da yazılamaz).
+    const now = Date.now();
+    while (restarts.length && now - restarts[0] > 600000) restarts.shift();
+    const storage = /disk-full|output-blocked|output-missing/.test(message);
+    if (wasRecording && !storage && engine.source && restarts.length < 3 && !ui.closing) {
+      restarts.push(now);
+      await wait(1000);
+      if (ui.state === 'idle') {
+        await toggleRecord();
+        if (ui.state === 'recording') {
+          toast({ title: t('toast.autoRestart'), kind: 'info', timeout: 9000 });
+          notifySystem(t('toast.autoRestart'), '');
+          api.log('info', 'kayıt hatadan sonra yeni dosyada yeniden başlatıldı');
+        }
+      }
+    } else if (wasRecording) {
+      notifySystem(t('toast.fatal'), message);
+    }
   });
 
   api.on('hotkey', (name) => {
@@ -1254,6 +1386,153 @@ function bindEngine() {
   });
 }
 
+// ------------------------------------------------------------------ izinler ve kayıt kontrolü
+
+function permRow({ state, title, text, buttons = [] }) {
+  const row = el('div', `perm-row ${state}`);
+  const dot = el('div', 'perm-dot');
+  dot.innerHTML = icon(state === 'ok' ? 'check' : state === 'wait' ? 'info' : state === 'warn' ? 'info' : 'x');
+  const body = el('div', 'perm-text');
+  body.append(el('b', '', title), el('small', '', text));
+  if (buttons.length) {
+    const box = el('div', 'perm-btns');
+    for (const b of buttons) {
+      const button = el('button', 'btn small', b.label);
+      button.addEventListener('click', b.run);
+      box.append(button);
+    }
+    body.append(box);
+  }
+  row.append(dot, body);
+  return row;
+}
+
+async function chooseFolderAndRecheck() {
+  const dir = await api.chooseDir();
+  if (!dir) return;
+  await save({ outputDir: dir });
+  renderSettings();
+  refreshLibrary();
+  runPermissionCheck({ show: true });
+}
+
+let permRun = null;
+
+// Ekran, mikrofon ve kayıt klasörü erişimini kontrol eder. Windows masaüstü
+// uygulamalarına izin penceresi göstermez; izin kapalıysa kullanıcıya nedenini
+// ve hangi ayarı açacağını söyleriz. Sorun varsa (ya da show) pencere açılır.
+function runPermissionCheck(opts = {}) {
+  if (!permRun) permRun = checkPermissionsNow(opts).finally(() => { permRun = null; });
+  return permRun;
+}
+
+async function checkPermissionsNow({ show = false, retry = false } = {}) {
+  const list = $('permList');
+  if (show) {
+    list.textContent = '';
+    list.append(permRow({ state: 'wait', title: t('perm.checking'), text: '' }));
+    $('permSummary').textContent = '';
+    $('permModal').hidden = false;
+  }
+  if (retry) {
+    // "Tekrar kontrol et": kullanıcı ayarı düzelttiyse mikrofonu ve ekranı yeniden aç.
+    if (settings.mic.enabled && !engine.micStream) await engine.refreshMic({ quiet: true });
+    if (!engine.source) {
+      try {
+        sources = await api.listSources();
+        const screens = sources.filter((x) => x.type === 'screen');
+        const target = screens.find((x) => x.primary) || screens[0];
+        if (target) await chooseSource({ ...target, name: sourceLabel(target, screens.indexOf(target)) }, { quiet: true });
+      } catch {}
+    }
+    renderAudioCard();
+    populateDevices();
+  }
+
+  let res;
+  try {
+    res = await api.checkPermissions();
+  } catch (err) {
+    res = { mic: 'unknown', output: { ok: false, code: errorCode(err), free: null } };
+  }
+  const rows = [];
+
+  const screenOk = !!engine.source;
+  rows.push({
+    state: screenOk ? 'ok' : 'bad',
+    title: t('perm.screen'),
+    text: screenOk ? t('perm.screenOk') : t('perm.screenBad'),
+    buttons: screenOk ? [] : [{ label: t('perm.openSettings'), run: () => api.openSystemSettings('screen') }],
+  });
+
+  const micErr = engine.micError && engine.micError.name;
+  const micSettings = { label: t('perm.openSettings'), run: () => api.openSystemSettings('mic') };
+  let mic;
+  if (!settings.mic.enabled) mic = { state: 'warn', text: t('perm.micOff') };
+  else if (engine.micStream) {
+    const track = engine.micStream.getAudioTracks()[0];
+    mic = { state: 'ok', text: t('perm.micOk', { name: (track && track.label) || t('audio.default') }) };
+  } else if (res.mic === 'denied' || micErr === 'NotAllowedError') {
+    mic = { state: 'bad', text: t('perm.micDenied'), buttons: [micSettings] };
+  } else if (micErr === 'NotFoundError') {
+    mic = { state: 'bad', text: t('perm.micNone'), buttons: [{ label: t('perm.openSettings'), run: () => api.openSystemSettings('sound') }] };
+  } else {
+    mic = { state: 'bad', text: t('perm.micBusy'), buttons: [micSettings] };
+  }
+  rows.push({ title: t('perm.mic'), ...mic });
+
+  const out = res.output || {};
+  const folderBtn = { label: t('perm.chooseFolder'), run: chooseFolderAndRecheck };
+  let output;
+  if (out.ok) {
+    const free = out.free;
+    if (free !== null && free !== undefined && free < 10e9) {
+      output = { state: 'warn', text: t('perm.diskLow', { free: fmtSize(free) }), buttons: [folderBtn] };
+    } else {
+      output = { state: 'ok', text: t('perm.outputOk', { free: free == null ? '?' : fmtSize(free) }) };
+    }
+  } else if (out.code === 'output-blocked') {
+    output = {
+      state: 'bad',
+      text: t('perm.outputBlocked'),
+      buttons: [{ label: t('perm.openSecurity'), run: () => api.openSystemSettings('cfa') }, folderBtn],
+    };
+  } else if (out.code === 'output-missing') {
+    output = { state: 'bad', text: t('perm.outputMissing'), buttons: [folderBtn] };
+  } else {
+    output = { state: 'bad', text: t('perm.outputOther', { code: out.code || '?' }), buttons: [folderBtn] };
+  }
+  rows.push({ title: `${t('perm.output')} · ${out.dir || settings.outputDir}`, ...output });
+
+  const bad = rows.some((r) => r.state === 'bad');
+  api.log(bad ? 'error' : 'info', `izin kontrolü: ${rows.map((r) => `${r.title}=${r.state}`).join(' | ')}`);
+  list.textContent = '';
+  for (const row of rows) list.append(permRow(row));
+  $('permSummary').textContent = bad ? t('perm.someBad') : t('perm.allOk');
+  $('permSummary').classList.toggle('bad', bad);
+  if (show || bad) $('permModal').hidden = false;
+  return { bad, rows };
+}
+
+// Kayıt sürerken disk dolarsa dosya bozulmadan önce kaydı kendimiz kapatırız.
+function startDiskMonitor() {
+  setInterval(async () => {
+    if (ui.state !== 'recording') return;
+    const free = await api.diskFree().catch(() => null);
+    if (free === null) return;
+    if (free < 600 * 1024 ** 2) {
+      api.log('error', `disk doldu (${free} bayt), kayıt durduruluyor`);
+      toast({ title: t('toast.diskStop'), kind: 'error', timeout: 15000 });
+      notifySystem(t('toast.diskStop'), '');
+      await stopRecord();
+    } else if (free < 3 * 1024 ** 3 && !ui.diskWarned) {
+      ui.diskWarned = true;
+      toast({ title: t('toast.diskLow', { free: fmtSize(free) }), kind: 'error', timeout: 12000 });
+      notifySystem(t('toast.diskLow', { free: fmtSize(free) }), '');
+    }
+  }, 15000);
+}
+
 // ------------------------------------------------------------------ otomatik test
 
 async function selftest() {
@@ -1262,6 +1541,8 @@ async function selftest() {
   // zamanı karşılaştırılarak ses-görüntü kayması ölçülür.
   const beepCtx = new AudioContext();
   const marker = async () => {
+    // silent: kullanıcı başka bir kayıt alırken test bip sesi ve parlama üretmez.
+    if ((settings.selftest || {}).silent) return wait(300);
     const osc = beepCtx.createOscillator();
     const gain = beepCtx.createGain();
     gain.gain.value = 0.06;
@@ -1325,6 +1606,16 @@ async function selftest() {
     await toggleRecord(); // arayüzdeki kayıt düğmesiyle aynı yol
     if (ui.state !== 'recording') throw new Error(`kayıt başlamadı: ${ui.lastError}`);
     result.session = engine.sessionInfo;
+    if (opts.micDrop && engine.micStream) {
+      // Mikrofonun kayıt ortasında kopmasını taklit et; otomatik geri bağlanmalı.
+      result.micEvents = [];
+      for (const type of ['mic-lost', 'mic-restored']) {
+        engine.addEventListener(type, () => result.micEvents.push(type));
+      }
+      engine.micStream.getAudioTracks()[0].dispatchEvent(new Event('ended'));
+      await wait(4500);
+      result.micAfterDrop = !!engine.micStream;
+    }
     await wait(1500);
     await marker(); // ~1.5 sn
     await wait(1200);
@@ -1385,7 +1676,7 @@ async function boot() {
   applyI18n();
   $('railVersion').textContent = `v${appInfo.version}`;
   $('aboutVersion').textContent = `v${appInfo.version}`;
-  $('aboutMeta').textContent = `Electron ${appInfo.electron} · Chromium ${appInfo.chrome} · sibertilki`;
+  $('aboutMeta').textContent = `Electron ${appInfo.electron} · Chromium ${appInfo.chrome} · GPL-3.0 · © Siber Tilki`;
   api.setTrayLabels({ show: t('tray.show'), start: t('tray.start'), stop: t('tray.stop'), quit: t('tray.quit') });
 
   engine = new Engine($('preview'));
@@ -1437,10 +1728,31 @@ async function boot() {
   renderAudioCard();
   renderCameraCard();
 
+  startDiskMonitor();
+
   if (SELFTEST) {
     selftest();
     return;
   }
+
+  // Arayüz bir önceki çalışmada çöktüyse yarım kalan kayıt korunmuştur; haber ver.
+  try {
+    for (const file of await api.takeRescued()) {
+      toast({
+        title: t('toast.rescued'),
+        sub: `${file.name} · ${fmtSize(file.size)}`,
+        kind: 'info',
+        timeout: 15000,
+        action: { label: t('toast.show'), run: () => api.revealItem(file.path) },
+      });
+    }
+  } catch {}
+
+  // İlk açılışta izin/klasör kontrolünü göster; sonraki açılışlarda yalnızca sorun varsa.
+  const firstRun = !settings.permissionsShown;
+  await runPermissionCheck({ show: firstRun }).catch((err) => console.error('izin kontrolü', err));
+  if (firstRun) await save({ permissionsShown: true });
+
   if (settings.replayEnabled && engine.source) await setReplay(true);
 }
 
