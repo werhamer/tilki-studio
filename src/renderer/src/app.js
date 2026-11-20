@@ -1696,6 +1696,7 @@ async function selftest() {
     result.systemAudio = engine.systemAvailable;
     result.mic = !!engine.micStream;
     result.micNoise = engine.micNoiseActive;
+    result.micTrackSettings = engine.micTrackSettings;
     result.outputLatencyMs = Math.round((beepCtx.outputLatency || 0) * 1000);
 
     const opts = settings.selftest || {};

@@ -366,6 +366,20 @@ export class Engine extends EventTarget {
       if (!this.mic.fx) this.mic.node.connect(this.mic.gain);
       if (level === 'strong' && this.micNoiseActive !== 'strong') this.emit('noise-fallback', {});
       const track = stream.getAudioTracks()[0];
+      // Uygulanan mikrofon ayarlarını günlüğe yaz (gürültü/yankı engelleme gerçekten açık mı?).
+      if (track) {
+        const st = track.getSettings();
+        this.micTrackSettings = {
+          label: track.label,
+          noiseSuppression: st.noiseSuppression,
+          echoCancellation: st.echoCancellation,
+          autoGainControl: st.autoGainControl,
+          sampleRate: st.sampleRate,
+          channelCount: st.channelCount,
+          rnnoise: this.micNoiseActive === 'strong',
+        };
+        api.log('info', `mikrofon açıldı: seviye=${level} uygulanan=${JSON.stringify(this.micTrackSettings)}`);
+      }
       if (track) {
         track.addEventListener('ended', () => {
           if (this.micStream === stream) this.onMicLost();
