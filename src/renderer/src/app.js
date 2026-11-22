@@ -934,6 +934,10 @@ function bindAudio() {
     }
     await save({ recordMode: mode });
     api.log('info', `kayıt türü: ${mode}`);
+    // Ekran yakalamayı yeni moda göre (ses: 1 fps küçük, görüntü: tam) yeniden aç.
+    if (engine.source && engine.sourceMode !== mode) {
+      await chooseSource({ ...engine.source }, { quiet: true });
+    }
     render();
   });
   $('micDevice').addEventListener('change', async (event) => {
@@ -1700,6 +1704,16 @@ async function selftest() {
     result.outputLatencyMs = Math.round((beepCtx.outputLatency || 0) * 1000);
 
     const opts = settings.selftest || {};
+    if (opts.micNonDefault) {
+      // Test: kullanıcı gibi "Varsayılan" yerine aygıtın kendi girişini seç.
+      const list = await navigator.mediaDevices.enumerateDevices();
+      const dev = list.find((d) => d.kind === 'audioinput' && d.deviceId !== 'default' && d.deviceId !== 'communications');
+      if (dev) {
+        settings.mic = { ...settings.mic, deviceId: dev.deviceId };
+        engine.settings = settings;
+        await engine.refreshMic();
+      }
+    }
     if (opts.noPreview) engine.setPreviewVisible(false);
     if (opts.css) {
       const style = document.createElement('style');

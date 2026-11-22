@@ -622,6 +622,7 @@ async function openSession(msg, request) {
       const track = {
         name: input.name, enc: null, reader: null, config: null,
         encTime: 0, wallNext: null, wallEnd: 0, segments: [], capOffset: null,
+        diag: { samplesUs: 0, chunks: 0, resyncs: 0, gapUs: 0, maxLagUs: 0, since: performance.now() },
       };
       track.enc = new AudioEncoder({
         output: (chunk, meta) => {
@@ -717,6 +718,8 @@ async function pumpAudio(s, track, readable) {
 function handleAudio(s, track, data) {
   if (!s.encoding || track.enc.state !== 'configured') {
     track.wallNext = null;
+    // Duraklatma/bekleme süresi tanı ölçümüne "kayıp" diye girmesin.
+    track.diag = { samplesUs: 0, chunks: 0, resyncs: 0, gapUs: 0, maxLagUs: 0, since: performance.now() };
     return;
   }
   const frames = data.numberOfFrames;
@@ -740,6 +743,15 @@ function handleAudio(s, track, data) {
     if (Math.abs(expected - track.wallNext) > 150000) start = Math.max(expected, track.wallNext);
   } else if (Math.abs(arrival - track.wallNext) > 1500000) {
     start = Math.max(arrival, track.wallNext);
+  }
+  // Tanı bilgisi: ne kadar ses geldi, kaç kez yeniden hizalandı, en uzun gecikme.
+  const dg = track.diag;
+  dg.chunks++;
+  dg.samplesUs += durUs;
+  if (cap !== null && track.capOffset !== null) dg.maxLagUs = Math.max(dg.maxLagUs, arrival - (cap + track.capOffset));
+  if (start !== null && track.wallNext !== null) {
+    dg.resyncs++;
+    dg.gapUs += Math.max(0, start - track.wallNext);
   }
   if (start !== null) {
     track.segments.push({ enc: track.encTime, wall: start });
@@ -1056,6 +1068,25 @@ async function saveReplay(msg) {
 let statsLast = { time: 0, frames: 0, bytes: 0 };
 
 function startStats() {
+  // Kayıt sürerken 10 saniyede bir ses akışının sağlığını günlüğe yaz: gelen ses süresi
+  // geçen süreye eşit olmalı; değilse kayıp vardır ve nedeni buradan görülür.
+  setInterval(() => {
+    const s = session;
+    if (!s || !s.encoding || !rec) return;
+    const now = performance.now();
+    for (const track of s.audio) {
+      const dg = track.diag;
+      const wallS = (now - dg.since) / 1000;
+      if (wallS < 1) continue;
+      post('log', {
+        level: dg.samplesUs / 1e6 < wallS * 0.97 || dg.gapUs > 50000 ? 'error' : 'info',
+        message: `[ses ${track.name}] ${wallS.toFixed(1)} sn'de ${(dg.samplesUs / 1e6).toFixed(2)} sn ses, `
+          + `${dg.chunks} parça, yeniden hizalama ${dg.resyncs}, eklenen boşluk ${Math.round(dg.gapUs / 1000)} ms, `
+          + `en uzun gecikme ${Math.round(dg.maxLagUs / 1000)} ms, kodlayıcı kuyruğu ${track.enc.encodeQueueSize}`,
+      });
+      track.diag = { samplesUs: 0, chunks: 0, resyncs: 0, gapUs: 0, maxLagUs: 0, since: now };
+    }
+  }, 10000);
   setInterval(() => {
     const s = session;
     const now = performance.now();

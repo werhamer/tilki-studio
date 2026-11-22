@@ -141,6 +141,9 @@ export class Engine extends EventTarget {
         this.dims = { outW: msg.outW, outH: msg.outH, srcW: msg.srcW, srcH: msg.srcH };
         this.emit('dims', this.dims);
         break;
+      case 'log':
+        api.log(msg.level || 'info', msg.message);
+        break;
       case 'stats':
         if (msg.stats && msg.stats.rec) this.recDuration = msg.stats.rec.duration;
         this.emit('stats', msg.stats);
@@ -187,13 +190,18 @@ export class Engine extends EventTarget {
 
   async setSource(source) {
     const fps = this.settings.fps;
+    // Sadece ses modunda görüntü kaydedilmez; ekran yakalama yalnızca sistem sesi için
+    // açık tutulur ve en küçük boyuta / 1 fps'e indirilir. Böylece ekran kartı (ve onun
+    // çökmeleri) ses kaydını etkilemez.
+    const audioMode = this.settings.recordMode === 'audio';
+    this.sourceMode = audioMode ? 'audio' : 'video';
     const video = {
       mandatory: {
         chromeMediaSource: 'desktop',
         chromeMediaSourceId: source.id,
-        maxWidth: 7680,
-        maxHeight: 4320,
-        maxFrameRate: fps,
+        maxWidth: audioMode ? 320 : 7680,
+        maxHeight: audioMode ? 180 : 4320,
+        maxFrameRate: audioMode ? 1 : fps,
       },
     };
     let stream;
@@ -499,7 +507,14 @@ export class Engine extends EventTarget {
     try {
       this.sessionInfo = await this.call(
         'session-start',
-        { audioOrder: order.audio, audioBitrate: s.audioBitrate * 1000, audio, audioOnly },
+        {
+          // Sadece seste Opus: işlemcide kodlanır. Windows'ta AAC ekran kartı sürecinde
+          // çalışıyor; o süreç çökünce ses kodlayıcı da ölüp kaydı bölüyordu.
+          audioOrder: audioOnly ? ['opus', 'aac'] : order.audio,
+          audioBitrate: s.audioBitrate * 1000,
+          audio,
+          audioOnly,
+        },
         audio.map((a) => a.readable),
       );
     } catch (err) {

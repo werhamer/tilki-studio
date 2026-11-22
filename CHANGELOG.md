@@ -1,5 +1,14 @@
 # Değişiklik günlüğü
 
+## 0.1.5
+
+- **Sadece ses modu ekran kartından bağımsız.** Bu modda ekran yakalama yalnızca sistem sesi
+  için açık tutuluyor ve 1 fps / 320×180'e iniyor (önceden 120 fps tam çözünürlük akıyordu).
+  Ses Opus ile işlemcide kodlanıyor; Windows'ta AAC ekran kartı sürecinde çalıştığı için o süreç
+  çökünce kayıt "Encoding error" ile bölünüyordu.
+- **Tanı günlüğü:** kayıt sırasında 10 saniyede bir her ses izi için gelen ses süresi,
+  yeniden hizalama, eklenen boşluk ve gecikme günlüğe yazılır; kayıp olursa nedeni görülür.
+
 ## 0.1.4
 
 - **Düzeltme: sadece ses kayıtlarında sesin bir kısmı kayboluyordu.** Kayıt motoru takıldığında

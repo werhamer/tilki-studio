@@ -397,6 +397,12 @@ function createWindow() {
     if (!ISOLATED) return win.show();
     // Test modları odağı asla çalmaz; TILKI_TEST_HIDDEN ile pencere hiç açılmaz.
     if (process.env.TILKI_TEST_HIDDEN) return;
+    if (process.env.TILKI_TEST_OFFSCREEN) {
+      // Test: pencere gerçekten çizilsin ama kullanıcının ekranında görünmesin.
+      win.setPosition(-5000, 0);
+      win.showInactive();
+      return;
+    }
     if (SELFTEST) win.setAlwaysOnTop(true); // senkron testi için pencere kayıtta görünmeli
     win.showInactive();
   });
