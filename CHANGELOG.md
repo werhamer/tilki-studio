@@ -10,6 +10,7 @@
 - **Düzeltme: 320 kbps seçilince ses Opus'a geçiyordu.** Windows'un AAC kodlayıcısı en fazla
   192 kbps destekliyor; artık 192 kbps AAC kullanılıyor (Opus'lu .m4a bazı kurgu programlarında açılmıyordu).
 - Mikrofon açılınca uygulanan ayarlar (gürültü / yankı engelleme) günlüğe yazılıyor.
+- Sadece ses modunda yanlışlıkla çıkan "Donanım kodlayıcı bulunamadı" uyarısı kaldırıldı.
 
 ## 0.1.3
 

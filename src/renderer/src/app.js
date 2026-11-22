@@ -394,7 +394,7 @@ async function toggleRecord() {
     ui.state = 'recording';
     ui.diskWarned = false;
     api.log('info', `kayıt başladı ${engine.recFile && engine.recFile.name} ${JSON.stringify(engine.sessionInfo)}`);
-    if (engine.sessionInfo && !engine.sessionInfo.hardware && !ui.warnedSoft) {
+    if (engine.sessionInfo && !engine.sessionInfo.audioOnly && !engine.sessionInfo.hardware && !ui.warnedSoft) {
       ui.warnedSoft = true;
       toast({ title: t('toast.softEncoder'), kind: 'info' });
     }
