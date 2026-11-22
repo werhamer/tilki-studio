@@ -1,5 +1,16 @@
 # Değişiklik günlüğü
 
+## 0.1.4
+
+- **Düzeltme: sadece ses kayıtlarında sesin bir kısmı kayboluyordu.** Kayıt motoru takıldığında
+  (örneğin ekran kartı süreci çöktükten sonra, yüksek kare hızında) ses parçaları küçük bir
+  tampondan taşıp atılıyor, kalanlar da gecikmeli geldiği için araya boşluk konuyordu
+  (bir kayıtta sesin ~%34'ü). Artık ses tamponu ~5 saniye, zamanlama parçanın yakalandığı ana
+  göre yapılıyor ve sadece ses modunda önizleme hiç çizilmiyor. Takılma testinde kayıp %0.
+- **Düzeltme: 320 kbps seçilince ses Opus'a geçiyordu.** Windows'un AAC kodlayıcısı en fazla
+  192 kbps destekliyor; artık 192 kbps AAC kullanılıyor (Opus'lu .m4a bazı kurgu programlarında açılmıyordu).
+- Mikrofon açılınca uygulanan ayarlar (gürültü / yankı engelleme) günlüğe yazılıyor.
+
 ## 0.1.3
 
 - **Düzeltme: küçültülmüş pencereler kaynak listesinde çıkmıyordu.** Pencere sekmesi,

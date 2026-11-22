@@ -68,7 +68,9 @@ export class Engine extends EventTarget {
     this.settings = settings;
     // Test kancası: "hang" adlı worker ekran kartı sorgularının yanıtsız kaldığını taklit eder.
     const hang = !!(settings.selftest && settings.selftest.hangQueries);
-    this.worker = new Worker('dist/worker.js', { name: hang ? 'hang' : 'tilki' });
+    // Test kancası: "stall" adlı worker, ekran kartı çöktükten sonraki gibi düzenli takılır.
+    const stall = !!(settings.selftest && settings.selftest.stallWorker);
+    this.worker = new Worker('dist/worker.js', { name: hang ? 'hang' : stall ? 'stall' : 'tilki' });
     this.worker.onmessage = (event) => this.onWorkerMessage(event.data);
     this.worker.onerror = (event) => this.emit('error', { message: event.message || 'worker' });
 
@@ -491,7 +493,8 @@ export class Engine extends EventTarget {
     const audio = inputs.map(([name, node]) => {
       const track = node.stream.getAudioTracks()[0].clone();
       this.sessionTracks.push(track);
-      return { name, readable: new MediaStreamTrackProcessor({ track }).readable };
+      // Geniş tampon (~5 sn): kayıt motoru bir an takılsa bile ses parçaları atılmasın.
+      return { name, readable: new MediaStreamTrackProcessor({ track, maxBufferSize: 500 }).readable };
     });
     try {
       this.sessionInfo = await this.call(

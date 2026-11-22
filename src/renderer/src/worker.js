@@ -14,6 +14,14 @@ import { camRect, RESOLUTIONS, targetBitrate } from './geometry.js';
 
 const post = (type, data = {}, transfer = []) => self.postMessage({ type, ...data }, transfer);
 
+if (self.name === 'stall') {
+  // Yalnızca otomatik testte: iş parçacığını her ~280 ms'de 170 ms meşgul et.
+  setInterval(() => {
+    const until = performance.now() + 170;
+    while (performance.now() < until) { /* meşgul bekle */ }
+  }, 280);
+}
+
 if (self.name === 'hang') {
   // Yalnızca otomatik testte: yanıt vermeyen ekran kartı sürücüsünü taklit et.
   VideoEncoder.isConfigSupported = () => new Promise(() => {});
@@ -242,7 +250,7 @@ function startLoop() {
       // Geride kaldık: aradaki kareleri atla.
       const skipped = Math.floor((now - nextTick) / interval);
       nextTick += skipped * interval;
-      if (session && session.encoding) session.dropped += skipped;
+      if (session && session.encoding && !session.audioOnly) session.dropped += skipped;
     }
     loopTimer = setTimeout(step, Math.max(0, nextTick - performance.now()));
   };
@@ -255,6 +263,9 @@ const PREVIEW_INTERVAL = 1000 / 30; // önizleme 30 fps yeter; kayıt tam hızda
 
 function tick(time) {
   const s = session;
+  // Sadece ses kaydında görüntü kodlanmaz ve önizleme sahnenin arkasında kalır: hiç
+  // çizim yapma ki iş parçacığı ses işlemeye ayrılsın.
+  if (s && s.audioOnly) return;
   const encoding = !!(s && s.encoding);
   const dirty = screenSlot.dirty || camSlot.dirty || layoutDirty;
   const rect = directRect();
@@ -523,10 +534,20 @@ async function claimVideoEncoder(request) {
 }
 
 async function pickAudioConfig(order, bitrate) {
+  // Windows'un AAC kodlayıcısı en fazla 192 kbps kabul ediyor. Daha yüksek bir değer
+  // seçildiyse sessizce Opus'a geçmek yerine (bazı kurgu programları MP4/M4A içinde
+  // Opus açamaz) önce 192 kbps AAC denenir.
+  const candidates = [];
   for (const codec of order) {
-    const cfg = codec === 'aac'
-      ? { codec: 'mp4a.40.2', sampleRate: 48000, numberOfChannels: 2, bitrate }
-      : { codec: 'opus', sampleRate: 48000, numberOfChannels: 2, bitrate: Math.min(bitrate, 256000) };
+    if (codec === 'aac') {
+      for (const rate of new Set([bitrate, Math.min(bitrate, 192000)])) {
+        candidates.push(['aac', { codec: 'mp4a.40.2', sampleRate: 48000, numberOfChannels: 2, bitrate: rate }]);
+      }
+    } else {
+      candidates.push([codec, { codec: 'opus', sampleRate: 48000, numberOfChannels: 2, bitrate: Math.min(bitrate, 256000) }]);
+    }
+  }
+  for (const [codec, cfg] of candidates) {
     try {
       const r = await withTimeout(AudioEncoder.isConfigSupported(cfg), QUERY_TIMEOUT);
       if (r !== 'timeout' && r.supported) return { codec, cfg };
@@ -600,7 +621,7 @@ async function openSession(msg, request) {
     msg.audio.forEach((input, index) => {
       const track = {
         name: input.name, enc: null, reader: null, config: null,
-        encTime: 0, wallNext: null, wallEnd: 0, segments: [],
+        encTime: 0, wallNext: null, wallEnd: 0, segments: [], capOffset: null,
       };
       track.enc = new AudioEncoder({
         output: (chunk, meta) => {
@@ -703,12 +724,28 @@ function handleAudio(s, track, data) {
   const durUs = (frames / data.sampleRate) * 1e6;
   // Kodlayıcı yalnızca kesintisiz bir örnek sayacı görür (encTime). Gerçek oturum
   // zamanı "segment" tablosunda tutulur; duraklatma ya da kopma yeni segment açar.
-  const wall = (performance.now() - s.t0) * 1000 - durUs;
-  if (track.wallNext === null || Math.abs(wall - track.wallNext) > 150000) {
-    const start = Math.max(wall, track.wallNext === null ? track.wallEnd : track.wallNext, 0);
+  //
+  // Konum, parçanın bize ulaştığı ana göre değil YAKALANDIĞI ana (data.timestamp) göre
+  // izlenir. Eskiden geliş zamanı kullanılıyordu: iş parçacığı takılıp (örneğin ekran
+  // kartı süreci çöktükten sonra) ses parçaları gecikmeli ve toplu gelince her seferinde
+  // ileri atlanıyor, kayıtta düzenli boşluklar oluşuyordu.
+  const arrival = (performance.now() - s.t0) * 1000 - durUs;
+  const cap = Number.isFinite(data.timestamp) ? data.timestamp : null;
+  let start = null;
+  if (track.wallNext === null) {
+    start = Math.max(arrival, track.wallEnd, 0);
+  } else if (cap !== null && track.capOffset !== null) {
+    // Yakalamada gerçek bir kopma (ya da saat kayması) varsa yeni segment aç.
+    const expected = cap + track.capOffset;
+    if (Math.abs(expected - track.wallNext) > 150000) start = Math.max(expected, track.wallNext);
+  } else if (Math.abs(arrival - track.wallNext) > 1500000) {
+    start = Math.max(arrival, track.wallNext);
+  }
+  if (start !== null) {
     track.segments.push({ enc: track.encTime, wall: start });
     if (track.segments.length > 32) track.segments.shift();
     track.wallNext = start;
+    track.capOffset = cap !== null ? start - cap : null;
   }
   const buffer = new Float32Array(frames * channels);
   for (let c = 0; c < channels; c++) {
