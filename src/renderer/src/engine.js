@@ -110,20 +110,19 @@ export class Engine extends EventTarget {
       node.channelCountMode = 'explicit';
       return node;
     };
-    this.mixDest = dest();
-    this.sysDest = dest();
-    this.micDest = dest();
-    const strip = (own) => {
+    // Web Audio artık yalnızca seviye göstergeleri için; kayıt sesi doğrudan
+    // yakalanıp worker'da karıştırılıyor (bkz. worker.js "ses: doğrudan yakalama").
+    void dest;
+    const strip = () => {
       const gain = ctx.createGain();
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 1024;
       gain.connect(analyser);
-      gain.connect(this.mixDest);
-      gain.connect(own);
       return { gain, analyser, node: null, buffer: new Float32Array(analyser.fftSize) };
     };
-    this.sys = strip(this.sysDest);
-    this.mic = strip(this.micDest);
+    this.sys = strip();
+    this.mic = strip();
+    this.inputClones = { mic: null, sys: null };
     this.applyVolumes();
     if (ctx.state !== 'running') ctx.resume().catch(() => {});
   }
@@ -142,7 +141,7 @@ export class Engine extends EventTarget {
       const ok = ratio > 0.97 && ratio < 1.03;
       api.log(ok ? 'info' : 'error',
         `[karıştırıcı] hız ${(ratio * 100).toFixed(1)}% (çıkış: ${this.audioSink}, durum: ${this.audio.state})`);
-      if (!ok) this.emit('audio-problem', { kind: 'render', ratio });
+      // Kayıt sesi artık bu saate bağlı değil; yalnızca bilgi olarak yazılır.
     }, 10000);
   }
 
@@ -184,6 +183,9 @@ export class Engine extends EventTarget {
         break;
       case 'log':
         api.log(msg.level || 'info', msg.message);
+        break;
+      case 'noise-state':
+        this.rnnoiseActive = !!msg.strong;
         break;
       case 'audio-gap':
         this.emit('audio-problem', { kind: 'gap', ms: msg.ms, track: msg.track });
@@ -284,6 +286,7 @@ export class Engine extends EventTarget {
       this.sys.node = this.audio.createMediaStreamSource(new MediaStream(stream.getAudioTracks()));
       this.sys.node.connect(this.sys.gain);
     }
+    this.sendInput('sys', this.systemAvailable ? stream.getAudioTracks()[0] : null);
     stopStream(old);
     this.emit('source', { source, systemAvailable: this.systemAvailable });
   }
@@ -295,6 +298,7 @@ export class Engine extends EventTarget {
     if (this.sys.node) this.sys.node.disconnect();
     this.sys.node = null;
     this.systemAvailable = false;
+    this.sendInput('sys', null);
     this.send('screen', { readable: null });
   }
 
@@ -305,6 +309,22 @@ export class Engine extends EventTarget {
     const now = this.audio.currentTime;
     this.sys.gain.gain.setTargetAtTime(system.enabled ? system.volume : 0, now, 0.015);
     this.mic.gain.gain.setTargetAtTime(mic.enabled ? mic.volume : 0, now, 0.015);
+    this.send('audio-gains', { mic: mic.enabled ? mic.volume : 0, sys: system.enabled ? system.volume : 0 });
+  }
+
+  // Kayıt için ses girdisini (mikrofon / sistem sesi) worker'a doğrudan bağla.
+  sendInput(kind, track) {
+    const old = this.inputClones[kind];
+    if (old) old.stop();
+    this.inputClones[kind] = null;
+    if (!track || track.readyState === 'ended') {
+      this.send('audio-input', { kind, readable: null });
+      return;
+    }
+    const clone = track.clone();
+    this.inputClones[kind] = clone;
+    const processor = new MediaStreamTrackProcessor({ track: clone, maxBufferSize: 500 });
+    this.send('audio-input', { kind, readable: processor.readable }, [processor.readable]);
   }
 
   // Aynı anda birden fazla mikrofon yenilemesi çalışmasın (yeniden bağlanma + kullanıcı).
@@ -327,6 +347,7 @@ export class Engine extends EventTarget {
     if (this.mic.node) this.mic.node.disconnect();
     this.mic.node = null;
     this.micStream = null;
+    this.sendInput('mic', null);
     this.emit('mic-lost', {});
     this.stopMicRetry();
     this.micRetry = setInterval(async () => {
@@ -375,6 +396,7 @@ export class Engine extends EventTarget {
     if (!cfg.enabled) {
       this.stopMicRetry();
       this.micLost = false;
+      this.sendInput('mic', null);
       return true;
     }
     const level = micNoiseLevel(cfg);
@@ -388,8 +410,8 @@ export class Engine extends EventTarget {
         channelCount: { ideal: 2 },
       },
     });
-    // wasm'ı mikrofon açılırken paralel yükle; açılış gecikmesin.
-    const rnnoise = level === 'strong' ? this.loadRnnoise() : null;
+    // Güçlü seviyede RNNoise kayıt motorunda (worker) uygulanır.
+    this.send('audio-noise', { strong: level === 'strong' });
     try {
       let stream;
       let fallback = false;
@@ -404,22 +426,10 @@ export class Engine extends EventTarget {
       }
       this.micStream = stream;
       this.mic.node = this.audio.createMediaStreamSource(stream);
-      this.micNoiseActive = level === 'standard' ? 'standard' : 'off';
-      const wasm = rnnoise ? await rnnoise : null;
-      if (wasm && this.micStream === stream) {
-        try {
-          this.mic.fx = new RnnoiseWorkletNode(this.audio, { maxChannels: 2, wasmBinary: wasm });
-          this.mic.node.connect(this.mic.fx);
-          this.mic.fx.connect(this.mic.gain);
-          this.micNoiseActive = 'strong';
-        } catch (err) {
-          console.error('[rnnoise]', err);
-          this.mic.fx = null;
-        }
-      }
-      if (!this.mic.fx) this.mic.node.connect(this.mic.gain);
-      if (level === 'strong' && this.micNoiseActive !== 'strong') this.emit('noise-fallback', {});
+      this.micNoiseActive = level;
+      this.mic.node.connect(this.mic.gain);
       const track = stream.getAudioTracks()[0];
+      this.sendInput('mic', track);
       // Uygulanan mikrofon ayarlarını günlüğe yaz (gürültü/yankı engelleme gerçekten açık mı?).
       if (track) {
         const st = track.getSettings();
@@ -430,7 +440,7 @@ export class Engine extends EventTarget {
           autoGainControl: st.autoGainControl,
           sampleRate: st.sampleRate,
           channelCount: st.channelCount,
-          rnnoise: this.micNoiseActive === 'strong',
+          rnnoise: level === 'strong',
         };
         api.log('info', `mikrofon açıldı: seviye=${level} uygulanan=${JSON.stringify(this.micTrackSettings)}`);
       }
@@ -445,6 +455,7 @@ export class Engine extends EventTarget {
       return true;
     } catch (err) {
       this.micError = { name: err && err.name, message: String(err && err.message) };
+      this.sendInput('mic', null);
       if (!quiet) this.emit('mic-error', this.micError);
       return false;
     }
@@ -539,15 +550,9 @@ export class Engine extends EventTarget {
     // Sadece ses kaydı her yerde açılan .m4a (AAC) dosyasına yazılır.
     const container = audioOnly ? 'm4a' : s.container;
     const order = audioOnly ? CODEC_ORDER.mp4 : CODEC_ORDER[s.container] || CODEC_ORDER.mp4;
-    const inputs = s.separateTracks
-      ? [['System', this.sysDest], ['Microphone', this.micDest]]
-      : [['Audio', this.mixDest]];
-    const audio = inputs.map(([name, node]) => {
-      const track = node.stream.getAudioTracks()[0].clone();
-      this.sessionTracks.push(track);
-      // Geniş tampon (~5 sn): kayıt motoru bir an takılsa bile ses parçaları atılmasın.
-      return { name, readable: new MediaStreamTrackProcessor({ track, maxBufferSize: 500 }).readable };
-    });
+    const outputs = s.separateTracks
+      ? [{ name: 'System', sources: ['sys'] }, { name: 'Microphone', sources: ['mic'] }]
+      : [{ name: 'Audio', sources: ['mic', 'sys'] }];
     try {
       this.sessionInfo = await this.call(
         'session-start',
@@ -556,10 +561,9 @@ export class Engine extends EventTarget {
           // çalışıyor; o süreç çökünce ses kodlayıcı da ölüp kaydı bölüyordu.
           audioOrder: audioOnly ? ['opus', 'aac'] : order.audio,
           audioBitrate: s.audioBitrate * 1000,
-          audio,
+          outputs,
           audioOnly,
         },
-        audio.map((a) => a.readable),
       );
     } catch (err) {
       this.releaseSessionTracks();

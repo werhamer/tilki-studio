@@ -1,5 +1,18 @@
 # Değişiklik günlüğü
 
+## 0.1.6
+
+- **Düzeltme: kayıtlarda sesin ~%35'i kayboluyordu (her ~0.43 sn'de ~0.17 sn boşluk).**
+  Kayıt sesi bir Web Audio karıştırıcısının çıktısından alınıyordu; o karıştırıcının saati
+  (varsayılan hoparlör çıkışı) gerçek kullanımda aksayınca gerçek zamanın ~%65'i kadar ses
+  üretiyordu. Artık kayıt sesi Web Audio'dan hiç geçmiyor: mikrofon ve sistem sesi doğrudan
+  yakalanıyor, yakalandıkları ana göre konumlanıp kayıt motorunda karıştırılıyor; ses düzeyleri
+  ve Güçlü gürültü engelleme (RNNoise) de orada uygulanıyor. Web Audio yalnızca seviye
+  göstergeleri için kaldı.
+- Bir ses kaynağı susarsa (ör. sistem sesi gelmiyor) öbürü beklemeden kaydedilir; açık
+  mikrofondan veri kesilirse ya da yakalamada kopma olursa kırmızı uyarı çıkar.
+- Görüntülü kayıtta duraklatma anındaki ses boşluğu 130 ms'den ~60 ms'ye indi.
+
 ## 0.1.5
 
 - **Bilinen sorun (araştırılıyor):** bazı oturumlarda ses karıştırıcısı gerçek zamanın ~%65'i

@@ -1820,6 +1820,7 @@ async function selftest() {
     await marker(); // duraklatmadan sonra, kayıtta ~4.5 sn (+hold)
     await wait(1200);
     result.stats = ui.stats;
+    result.rnnoiseActive = !!engine.rnnoiseActive;
     result.renderRatio = engine.renderRatio;
     result.audioProblem = !!ui.audioProblem;
     await stopRecord();

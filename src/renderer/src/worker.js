@@ -597,11 +597,11 @@ async function openSession(msg, request) {
   };
 
   try {
-    const audioSupported = msg.audio.length ? pickAudioConfig(msg.audioOrder, msg.audioBitrate) : null;
+    const audioSupported = msg.outputs.length ? pickAudioConfig(msg.audioOrder, msg.audioBitrate) : null;
     // Sadece ses kaydı: video kodlayıcı hiç açılmaz.
     const { video, prepared } = msg.audioOnly ? { video: null, prepared: false } : await claimVideoEncoder(request);
     if (!video && !msg.audioOnly) throw new Error('no-video-encoder');
-    if (msg.audioOnly && !msg.audio.length) throw new Error('nothing-to-record');
+    if (msg.audioOnly && !msg.outputs.length) throw new Error('nothing-to-record');
     s.audioOnly = !!msg.audioOnly;
     if (s.audioOnly) {
       s.width = 0;
@@ -614,15 +614,14 @@ async function openSession(msg, request) {
     s.timing.videoReady = Math.round(performance.now() - s.timing.start);
 
     const audio = await audioSupported;
-    if (msg.audio.length && !audio) throw new Error('no-audio-encoder');
+    if (msg.outputs.length && !audio) throw new Error('no-audio-encoder');
     s.aCodec = audio?.codec ?? null;
     s.timing.audioPicked = Math.round(performance.now() - s.timing.start);
 
-    msg.audio.forEach((input, index) => {
+    msg.outputs.forEach((output, index) => {
       const track = {
-        name: input.name, enc: null, reader: null, config: null,
-        encTime: 0, wallNext: null, wallEnd: 0, segments: [], capOffset: null,
-        diag: { samplesUs: 0, chunks: 0, resyncs: 0, gapUs: 0, maxLagUs: 0, since: performance.now() },
+        name: output.name, sources: output.sources, enc: null, config: null,
+        encTime: 0, segments: [], mix: newMix(),
       };
       track.enc = new AudioEncoder({
         output: (chunk, meta) => {
@@ -640,11 +639,9 @@ async function openSession(msg, request) {
     s.t0 = performance.now();
     if (video) video.owner = s;
     session = s;
-    msg.audio.forEach((input, index) => pumpAudio(s, s.audio[index], input.readable));
     updateEncoding();
     return sessionInfo();
   } catch (err) {
-    for (const input of msg.audio) input.readable.cancel().catch(() => {});
     for (const track of s.audio) if (track.enc.state !== 'closed') track.enc.close();
     if (s.venc && s.venc.state !== 'closed') s.venc.close();
     throw err;
@@ -674,7 +671,6 @@ async function stopSession() {
   replay.video = [];
   replay.audio = [];
   for (const a of s.audio) {
-    if (a.reader) a.reader.cancel().catch(() => {});
     try {
       a.enc.close();
     } catch {}
@@ -690,108 +686,354 @@ function updateEncoding() {
   if (!s) return;
   const next = replay.enabled || !!(rec && !rec.paused);
   if (next && !s.encoding) s.forceKey = true;
+  // Ses: her başlatma/duraklatmada karıştırıcı sıfırdan, yeni bir segmentle başlar.
+  if (next !== s.encoding) resetAudioTimeline(s);
   s.encoding = next;
 }
 
-async function pumpAudio(s, track, readable) {
+// ------------------------------------------------------------------ ses: doğrudan yakalama + karıştırıcı
+//
+// Kayıt sesi Web Audio'dan GEÇMEZ. Mikrofon ve sistem sesi parçaları doğrudan buraya
+// gelir; konumları yakalandıkları ana göre hesaplanır, ses düzeyi ve (Güçlü seviyede)
+// RNNoise burada uygulanır, sonra bir tamponda karıştırılıp kodlanır.
+// Eskiden kayıt sesi bir AudioContext'in çıktısından alınıyordu; o bağlamın saati
+// (varsayılan hoparlör) gerçek kullanımda aksadığında kayıtların ~%35'i boşluk oluyordu.
+
+const SR = 48000;
+const RING = SR * 4; // karıştırma tamponu: 4 sn
+const BLOCK = 960; // kodlayıcıya 20 ms'lik bloklar
+const LIVE_MS = 400; // bu kadar süre veri gelmeyen girdi "sessiz" sayılır, beklenmez
+const RESYNC_FRAMES = Math.round(SR * 0.04); // 40 ms'den büyük sapmada yeniden hizala
+
+const inputs = { mic: null, sys: null };
+const gains = { mic: 1, sys: 1 };
+let noiseStrong = false;
+let rnnoiseEntry = null;
+let rnnoiseLoading = null;
+
+function newMix() {
+  return {
+    l: new Float32Array(RING),
+    r: new Float32Array(RING),
+    emitted: null,
+    filled: {},
+    lastAt: {},
+    segOpen: false,
+  };
+}
+
+function newDiag() {
+  return { frames: 0, chunks: 0, resyncs: 0, gapFrames: 0, maxLagMs: 0, since: performance.now() };
+}
+
+function resetAudioTimeline(s) {
+  for (const track of s.audio) {
+    const old = track.mix;
+    track.mix = newMix();
+    old.l = null;
+    old.r = null;
+  }
+  for (const inp of Object.values(inputs)) {
+    if (!inp) continue;
+    inp.anchored = false;
+    inp.diag = newDiag();
+  }
+}
+
+// RNNoise'u AudioWorklet işleyicisinin kendisiyle, burada (worker'da) çalıştırırız.
+function loadRnnoiseEntry() {
+  if (rnnoiseEntry) return Promise.resolve(rnnoiseEntry);
+  if (!rnnoiseLoading) {
+    rnnoiseLoading = (async () => {
+      const base = self.location.href;
+      // Paketin ana dosyası AudioWorkletNode'a bağlı (worker'da yok); wasm'ı kendimiz yükleriz.
+      const fetchWasm = async (name) => (await fetch(new URL(`rnnoise/${name}`, base).href)).arrayBuffer();
+      let wasm = await fetchWasm('rnnoise_simd.wasm');
+      if (!WebAssembly.validate(wasm)) wasm = await fetchWasm('rnnoise.wasm');
+      let cls = null;
+      self.AudioWorkletProcessor = class {
+        constructor() {
+          this.port = { addEventListener() {}, removeEventListener() {}, postMessage() {}, start() {} };
+        }
+      };
+      self.registerProcessor = (_name, c) => { cls = c; };
+      self.sampleRate = SR;
+      const url = new URL('rnnoise/workletProcessor.js', base).href;
+      await import(/* @vite-ignore */ url);
+      if (!cls) throw new Error('işleyici yüklenemedi');
+      rnnoiseEntry = { cls, wasm };
+      return rnnoiseEntry;
+    })().catch((err) => {
+      post('log', { level: 'error', message: `[rnnoise] yüklenemedi: ${err && err.message}` });
+      rnnoiseLoading = null;
+      return null;
+    });
+  }
+  return rnnoiseLoading;
+}
+
+function makeDenoiser(entry) {
+  const proc = new entry.cls({ processorOptions: { wasmBinary: entry.wasm, maxChannels: 2 } });
+  const fl = new Float32Array(128);
+  const fr = new Float32Array(128);
+  let fill = 0;
+  return {
+    get ready() {
+      return !!proc.processor;
+    },
+    // Akışı 128 örneklik bloklarla işler; sabit (~15 ms) gecikmeyle aynı sayıda örnek döner.
+    run(L, R) {
+      const total = fill + L.length;
+      const blocks = Math.floor(total / 128);
+      const outL = new Float32Array(blocks * 128);
+      const outR = new Float32Array(blocks * 128);
+      let o = 0;
+      for (let i = 0; i < L.length; i++) {
+        fl[fill] = L[i];
+        fr[fill] = R[i];
+        fill++;
+        if (fill === 128) {
+          const ol = outL.subarray(o, o + 128);
+          const or = outR.subarray(o, o + 128);
+          if (proc.processor) proc.process([[fl, fr]], [[ol, or]]);
+          else {
+            ol.set(fl);
+            or.set(fr);
+          }
+          o += 128;
+          fill = 0;
+        }
+      }
+      return [outL, outR];
+    },
+    destroy() {
+      try {
+        proc.destroy();
+      } catch {}
+    },
+  };
+}
+
+function attachDenoiser(inp) {
+  loadRnnoiseEntry().then((entry) => {
+    if (!entry || inp.dead || !noiseStrong || inp.ns) return;
+    inp.ns = makeDenoiser(entry);
+    post('noise-state', { strong: true });
+  });
+}
+
+function detachDenoiser(inp) {
+  if (inp && inp.ns) {
+    inp.ns.destroy();
+    inp.ns = null;
+  }
+  post('noise-state', { strong: false });
+}
+
+function setInput(kind, readable) {
+  const old = inputs[kind];
+  if (old) {
+    old.dead = true;
+    if (old.reader) old.reader.cancel().catch(() => {});
+    if (old.ns) old.ns.destroy();
+  }
+  inputs[kind] = null;
+  if (!readable) return;
+  const inp = {
+    kind, reader: null, dead: false, anchored: false, useCap: false, offset: 0, nextPos: 0,
+    lastArrival: 0, ns: null, rsPhase: 0, diag: newDiag(),
+  };
+  inputs[kind] = inp;
+  if (kind === 'mic' && noiseStrong) attachDenoiser(inp);
+  pumpInput(inp, readable);
+}
+
+async function pumpInput(inp, readable) {
   const reader = readable.getReader();
-  track.reader = reader;
+  inp.reader = reader;
+  let count = 0;
   try {
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
-      if (session !== s) {
+      if (inp.dead) {
         value.close();
         break;
       }
-      // Yalnızca test: gerçek kullanımda görülen kalıbı (her ~0.43 sn'de ~0.17 sn ses yok) taklit et.
-      if (self.name === 'dropaudio' && (track.testCount = (track.testCount || 0) + 1) % 43 < 17) {
+      // Yalnızca test: yakalamada kayıp (her ~0.43 sn'de ~0.17 sn) taklit et.
+      if (self.name === 'dropaudio' && inp.kind === 'mic' && ++count % 43 < 17) {
         value.close();
         continue;
       }
       try {
-        handleAudio(s, track, value);
+        handleInput(inp, value);
+      } catch (err) {
+        post('error', { message: `ses girdisi: ${err && err.message}` });
       } finally {
         value.close();
       }
     }
   } catch {
-    // Oturum kapanırken okuyucu iptal edilir.
+    // Girdi değişti ya da kapandı.
   }
 }
 
-function handleAudio(s, track, data) {
-  if (!s.encoding || track.enc.state !== 'configured') {
-    track.wallNext = null;
-    // Duraklatma/bekleme süresi tanı ölçümüne "kayıp" diye girmesin.
-    track.diag = { samplesUs: 0, chunks: 0, resyncs: 0, gapUs: 0, maxLagUs: 0, since: performance.now() };
+// Doğrusal örnekleme hızı dönüştürücü (girdi 48 kHz değilse; normalde gerekmez).
+function resample(inp, L, R, rate) {
+  const ratio = rate / SR;
+  const n = Math.floor((L.length - inp.rsPhase) / ratio);
+  const oL = new Float32Array(Math.max(0, n));
+  const oR = new Float32Array(Math.max(0, n));
+  for (let i = 0; i < n; i++) {
+    const x = inp.rsPhase + i * ratio;
+    const j = Math.floor(x);
+    const f = x - j;
+    const j2 = Math.min(j + 1, L.length - 1);
+    oL[i] = L[j] * (1 - f) + L[j2] * f;
+    oR[i] = R[j] * (1 - f) + R[j2] * f;
+  }
+  inp.rsPhase = inp.rsPhase + n * ratio - L.length;
+  if (inp.rsPhase < 0) inp.rsPhase = 0;
+  return [oL, oR];
+}
+
+function handleInput(inp, data) {
+  const now = performance.now();
+  inp.lastArrival = now;
+  const s = session;
+  if (!s || !s.encoding) {
+    inp.anchored = false;
     return;
   }
-  const frames = data.numberOfFrames;
-  const channels = data.numberOfChannels;
-  const durUs = (frames / data.sampleRate) * 1e6;
-  // Kodlayıcı yalnızca kesintisiz bir örnek sayacı görür (encTime). Gerçek oturum
-  // zamanı "segment" tablosunda tutulur; duraklatma ya da kopma yeni segment açar.
-  //
-  // Konum, parçanın bize ulaştığı ana göre değil YAKALANDIĞI ana (data.timestamp) göre
-  // izlenir. Eskiden geliş zamanı kullanılıyordu: iş parçacığı takılıp (örneğin ekran
-  // kartı süreci çöktükten sonra) ses parçaları gecikmeli ve toplu gelince her seferinde
-  // ileri atlanıyor, kayıtta düzenli boşluklar oluşuyordu.
-  const arrival = (performance.now() - s.t0) * 1000 - durUs;
-  const cap = Number.isFinite(data.timestamp) ? data.timestamp : null;
-  let start = null;
-  if (track.wallNext === null) {
-    start = Math.max(arrival, track.wallEnd, 0);
-  } else if (cap !== null && track.capOffset !== null) {
-    // Yakalamada gerçek bir kopma (ya da saat kayması) varsa yeni segment aç.
-    const expected = cap + track.capOffset;
-    if (Math.abs(expected - track.wallNext) > 150000) start = Math.max(expected, track.wallNext);
-  } else if (Math.abs(arrival - track.wallNext) > 1500000) {
-    start = Math.max(arrival, track.wallNext);
+  const n0 = data.numberOfFrames;
+  let L = new Float32Array(n0);
+  data.copyTo(L, { planeIndex: 0, format: 'f32-planar' });
+  let R = L;
+  if (data.numberOfChannels > 1) {
+    R = new Float32Array(n0);
+    data.copyTo(R, { planeIndex: 1, format: 'f32-planar' });
   }
-  // Tanı bilgisi: ne kadar ses geldi, kaç kez yeniden hizalandı, en uzun gecikme.
-  const dg = track.diag;
+  if (data.sampleRate !== SR) [L, R] = resample(inp, L, R, data.sampleRate);
+  const n = L.length;
+  const durUs = (n / SR) * 1e6;
+  const cap = Number.isFinite(data.timestamp) ? data.timestamp : null;
+  const arrivalUs = (now - s.t0) * 1000 - durUs;
+  const dg = inp.diag;
   dg.chunks++;
-  dg.samplesUs += durUs;
-  if (cap !== null && track.capOffset !== null) dg.maxLagUs = Math.max(dg.maxLagUs, arrival - (cap + track.capOffset));
-  if (start !== null && track.wallNext !== null) {
-    dg.resyncs++;
-    const gap = Math.max(0, start - track.wallNext);
-    dg.gapUs += gap;
-    // Kayıtta ses kesintisi: arayüze hemen bildir (en fazla 3 sn'de bir).
-    const now = performance.now();
-    if (gap > 50000 && rec && !rec.paused && now - (track.lastGapPost || 0) > 3000) {
-      track.lastGapPost = now;
-      post('audio-gap', { ms: Math.round(gap / 1000), track: track.name });
+  dg.frames += n;
+
+  if (!inp.anchored) {
+    inp.useCap = cap !== null;
+    inp.offset = inp.useCap ? arrivalUs - cap : 0;
+    inp.nextPos = Math.max(0, Math.round((arrivalUs * SR) / 1e6));
+    inp.anchored = true;
+  } else {
+    const capPos = Math.round((((inp.useCap ? cap + inp.offset : arrivalUs)) * SR) / 1e6);
+    const diff = capPos - inp.nextPos;
+    if (inp.useCap) dg.maxLagMs = Math.max(dg.maxLagMs, (arrivalUs - (cap + inp.offset)) / 1000);
+    const limit = inp.useCap ? RESYNC_FRAMES : SR; // zaman damgası yoksa yalnızca büyük sapmada
+    if (Math.abs(diff) > limit) {
+      dg.resyncs++;
+      if (diff > 0) {
+        dg.gapFrames += diff;
+        // Yakalamada gerçek kopma: kayıt sırasında arayüze hemen bildir.
+        if (rec && !rec.paused && diff > SR * 0.05 && now - (inp.lastGapPost || 0) > 3000) {
+          inp.lastGapPost = now;
+          post('audio-gap', { ms: Math.round((diff / SR) * 1000), track: inp.kind });
+        }
+      }
+      inp.nextPos = capPos;
     }
   }
-  if (start !== null) {
-    track.segments.push({ enc: track.encTime, wall: start });
-    if (track.segments.length > 32) track.segments.shift();
-    track.wallNext = start;
-    track.capOffset = cap !== null ? start - cap : null;
+
+  if (inp.ns) [L, R] = inp.ns.run(L, R);
+  const m = L.length;
+  const gain = gains[inp.kind];
+  for (const track of s.audio) {
+    if (track.sources.includes(inp.kind)) mixWrite(track, inp.kind, inp.nextPos, L, R, m, gain, now);
   }
-  const buffer = new Float32Array(frames * channels);
-  for (let c = 0; c < channels; c++) {
-    data.copyTo(buffer.subarray(c * frames, (c + 1) * frames), { planeIndex: c, format: 'f32-planar' });
+  inp.nextPos += m;
+  flushAudio(s, now);
+}
+
+function mixWrite(track, kind, pos, L, R, n, gain, now) {
+  const mx = track.mix;
+  if (mx.emitted === null) mx.emitted = pos;
+  const limit = mx.emitted + RING;
+  for (let i = 0; i < n; i++) {
+    const p = pos + i;
+    if (p < mx.emitted) continue; // çok geç geldi, o bölüm çoktan kodlandı
+    if (p >= limit) break;
+    const idx = p % RING;
+    mx.l[idx] += L[i] * gain;
+    mx.r[idx] += R[i] * gain;
+  }
+  mx.filled[kind] = Math.max(mx.filled[kind] ?? -Infinity, pos + n);
+  mx.lastAt[kind] = now;
+}
+
+function flushAudio(s, now = performance.now()) {
+  for (const track of s.audio) {
+    const mx = track.mix;
+    if (mx.emitted === null || track.enc.state !== 'configured') continue;
+    let ready = Infinity;
+    for (const kind of track.sources) {
+      if (!inputs[kind] || mx.filled[kind] === undefined) continue;
+      if (now - (mx.lastAt[kind] || 0) > LIVE_MS) continue; // sessiz/kopmuş girdi beklenmez
+      ready = Math.min(ready, mx.filled[kind]);
+    }
+    if (!Number.isFinite(ready)) continue;
+    while (ready - mx.emitted >= BLOCK) emitBlock(track, BLOCK);
+  }
+}
+
+function emitBlock(track, n) {
+  const mx = track.mix;
+  const start = mx.emitted;
+  const buf = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++) {
+    const idx = (start + i) % RING;
+    buf[i] = mx.l[idx];
+    buf[n + i] = mx.r[idx];
+    mx.l[idx] = 0;
+    mx.r[idx] = 0;
+  }
+  if (!mx.segOpen) {
+    track.segments.push({ enc: track.encTime, wall: (start / SR) * 1e6 });
+    if (track.segments.length > 32) track.segments.shift();
+    mx.segOpen = true;
   }
   const out = new AudioData({
     format: 'f32-planar',
-    sampleRate: data.sampleRate,
-    numberOfFrames: frames,
-    numberOfChannels: channels,
+    sampleRate: SR,
+    numberOfFrames: n,
+    numberOfChannels: 2,
     timestamp: Math.round(track.encTime),
-    data: buffer,
+    data: buf,
   });
-  track.encTime += durUs;
-  track.wallNext += durUs;
-  track.wallEnd = track.wallNext;
+  track.encTime += (n / SR) * 1e6;
+  mx.emitted += n;
   try {
     track.enc.encode(out);
   } finally {
     out.close();
   }
 }
+
+// Bir girdi tamamen susarsa (ör. mikrofon kablosu) öbürünü bekletmemek için düzenli boşalt;
+// kayıt sırasında açık mikrofondan 400 ms veri gelmezse uyar.
+setInterval(() => {
+  const s = session;
+  if (!s || !s.encoding) return;
+  const now = performance.now();
+  flushAudio(s, now);
+  const mic = inputs.mic;
+  if (rec && !rec.paused && mic && gains.mic > 0 && mic.lastArrival && now - mic.lastArrival > LIVE_MS
+      && now - (mic.lastGapPost || 0) > 3000) {
+    mic.lastGapPost = now;
+    post('audio-gap', { ms: Math.round(now - mic.lastArrival), track: 'mic' });
+  }
+}, 100);
 
 function onVideoChunk(s, chunk) {
   const pkt = EncodedPacket.fromEncodedChunk(chunk);
@@ -1086,17 +1328,24 @@ function startStats() {
     const s = session;
     if (!s || !s.encoding || !rec) return;
     const now = performance.now();
-    for (const track of s.audio) {
-      const dg = track.diag;
+    for (const inp of Object.values(inputs)) {
+      if (!inp) continue;
+      const dg = inp.diag;
       const wallS = (now - dg.since) / 1000;
       if (wallS < 1) continue;
+      const got = dg.frames / SR;
       post('log', {
-        level: dg.samplesUs / 1e6 < wallS * 0.97 || dg.gapUs > 50000 ? 'error' : 'info',
-        message: `[ses ${track.name}] ${wallS.toFixed(1)} sn'de ${(dg.samplesUs / 1e6).toFixed(2)} sn ses, `
-          + `${dg.chunks} parça, yeniden hizalama ${dg.resyncs}, eklenen boşluk ${Math.round(dg.gapUs / 1000)} ms, `
-          + `en uzun gecikme ${Math.round(dg.maxLagUs / 1000)} ms, kodlayıcı kuyruğu ${track.enc.encodeQueueSize}`,
+        level: got < wallS * 0.97 || dg.gapFrames > SR * 0.05 ? 'error' : 'info',
+        message: `[ses ${inp.kind}] ${wallS.toFixed(1)} sn'de ${got.toFixed(2)} sn ses, ${dg.chunks} parça, `
+          + `yeniden hizalama ${dg.resyncs}, kopma ${Math.round((dg.gapFrames / SR) * 1000)} ms, `
+          + `en uzun gecikme ${Math.round(dg.maxLagMs)} ms${inp.ns ? ', RNNoise' : ''}`,
       });
-      track.diag = { samplesUs: 0, chunks: 0, resyncs: 0, gapUs: 0, maxLagUs: 0, since: now };
+      inp.diag = newDiag();
+    }
+    for (const track of s.audio) {
+      if (track.enc.encodeQueueSize > 50) {
+        post('log', { level: 'error', message: `[ses ${track.name}] kodlayıcı kuyruğu ${track.enc.encodeQueueSize}` });
+      }
     }
   }, 10000);
   setInterval(() => {
@@ -1127,6 +1376,26 @@ function startStats() {
 // ------------------------------------------------------------------ mesajlar
 
 const handlers = {
+  'audio-input'(msg) {
+    setInput(msg.kind, msg.readable || null);
+  },
+
+  'audio-gains'(msg) {
+    gains.mic = Number(msg.mic) || 0;
+    gains.sys = Number(msg.sys) || 0;
+  },
+
+  'audio-noise'(msg) {
+    noiseStrong = !!msg.strong;
+    const mic = inputs.mic;
+    if (noiseStrong) {
+      if (mic && !mic.ns) attachDenoiser(mic);
+      else if (!mic) loadRnnoiseEntry();
+    } else {
+      detachDenoiser(mic);
+    }
+  },
+
   init(msg) {
     preview = msg.canvas;
     pctx = preview.getContext('2d', { alpha: false });
