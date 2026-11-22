@@ -23,6 +23,23 @@ function stopStream(stream) {
   if (stream) for (const track of stream.getTracks()) track.stop();
 }
 
+async function createMixerContext(settings) {
+  const test = settings.selftest && settings.selftest.sinkMatch;
+  if (test) {
+    // Yalnızca test: eski davranışı (belirli bir çıkış aygıtının saati) taklit et.
+    const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+    const dev = devices.find((d) => d.kind === 'audiooutput' && d.label.includes(test));
+    const ctx = new AudioContext({ sampleRate: 48000, ...(dev ? { sinkId: dev.deviceId } : {}) });
+    ctx.__tilkiSink = dev ? `device:${dev.label}` : 'default';
+    return ctx;
+  }
+  // Not: sinkId { type: 'none' } denendi; Chromium'un zamanlayıcılı sessiz çıkışı bu
+  // makinede düzenli boşluk üretti (%2–7). Varsayılan çıkışın saati daha kararlı.
+  const ctx = new AudioContext({ sampleRate: 48000 });
+  ctx.__tilkiSink = 'default';
+  return ctx;
+}
+
 export class Engine extends EventTarget {
   constructor(canvas) {
     super();
@@ -70,7 +87,8 @@ export class Engine extends EventTarget {
     const hang = !!(settings.selftest && settings.selftest.hangQueries);
     // Test kancası: "stall" adlı worker, ekran kartı çöktükten sonraki gibi düzenli takılır.
     const stall = !!(settings.selftest && settings.selftest.stallWorker);
-    this.worker = new Worker('dist/worker.js', { name: hang ? 'hang' : stall ? 'stall' : 'tilki' });
+    const drop = !!(settings.selftest && settings.selftest.dropAudio);
+    this.worker = new Worker('dist/worker.js', { name: hang ? 'hang' : stall ? 'stall' : drop ? 'dropaudio' : 'tilki' });
     this.worker.onmessage = (event) => this.onWorkerMessage(event.data);
     this.worker.onerror = (event) => this.emit('error', { message: event.message || 'worker' });
 
@@ -79,8 +97,13 @@ export class Engine extends EventTarget {
     this.pushConfig();
     this.pushLayout();
 
-    const ctx = new AudioContext({ sampleRate: 48000 });
+    // Ses karıştırıcısı varsayılan çıkış aygıtının saatiyle çalışır. Bu saat aksarsa
+    // (gerçek kullanımda görüldü: gerçek zamanın ~%65'i) startRenderWatch ve worker'daki
+    // boşluk denetimi kayıt sırasında büyük uyarı gösterir.
+    const ctx = await createMixerContext(settings);
     this.audio = ctx;
+    this.audioSink = ctx.__tilkiSink || 'none';
+    this.startRenderWatch();
     const dest = () => {
       const node = ctx.createMediaStreamDestination();
       node.channelCount = 2;
@@ -103,6 +126,24 @@ export class Engine extends EventTarget {
     this.mic = strip(this.micDest);
     this.applyVolumes();
     if (ctx.state !== 'running') ctx.resume().catch(() => {});
+  }
+
+  // Karıştırıcının gerçek zamanlı çalıştığını izle: 10 sn'de ilerleyen ses saati duvar
+  // saatinin %97'sinden azsa ses eksik üretiliyordur. Kayıt sırasında bu bir hatadır.
+  startRenderWatch() {
+    let last = { ct: this.audio.currentTime, pn: performance.now() };
+    setInterval(() => {
+      const now = { ct: this.audio.currentTime, pn: performance.now() };
+      const wall = (now.pn - last.pn) / 1000;
+      const ratio = wall > 0 ? (now.ct - last.ct) / wall : 1;
+      last = now;
+      this.renderRatio = ratio;
+      if (!this.recording) return;
+      const ok = ratio > 0.97 && ratio < 1.03;
+      api.log(ok ? 'info' : 'error',
+        `[karıştırıcı] hız ${(ratio * 100).toFixed(1)}% (çıkış: ${this.audioSink}, durum: ${this.audio.state})`);
+      if (!ok) this.emit('audio-problem', { kind: 'render', ratio });
+    }, 10000);
   }
 
   resumeAudio() {
@@ -143,6 +184,9 @@ export class Engine extends EventTarget {
         break;
       case 'log':
         api.log(msg.level || 'info', msg.message);
+        break;
+      case 'audio-gap':
+        this.emit('audio-problem', { kind: 'gap', ms: msg.ms, track: msg.track });
         break;
       case 'stats':
         if (msg.stats && msg.stats.rec) this.recDuration = msg.stats.rec.duration;

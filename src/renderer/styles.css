@@ -112,8 +112,16 @@ button:disabled { cursor: default; }
 .stage-audio {
   position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 6px; text-align: center; padding: 24px;
-  background: rgba(12, 13, 16, 0.82); backdrop-filter: blur(6px);
+  background: rgb(12, 13, 16);
 }
+.audio-alarm {
+  position: absolute; left: 16px; right: 16px; top: 16px; z-index: 6; display: flex; gap: 12px; align-items: center;
+  padding: 14px 16px; border-radius: var(--radius-sm); background: var(--rec); color: #fff;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+.audio-alarm .icon { width: 26px; height: 26px; flex: none; }
+.audio-alarm b { display: block; font-size: 15px; }
+.audio-alarm span { font-size: 12.5px; opacity: 0.92; }
 .stage-audio .icon { width: 44px; height: 44px; color: var(--accent); margin-bottom: 6px; }
 .stage-audio b { font-size: 18px; font-weight: 650; }
 .stage-audio span { color: var(--muted); max-width: 380px; }

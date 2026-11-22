@@ -704,6 +704,11 @@ async function pumpAudio(s, track, readable) {
         value.close();
         break;
       }
+      // Yalnızca test: gerçek kullanımda görülen kalıbı (her ~0.43 sn'de ~0.17 sn ses yok) taklit et.
+      if (self.name === 'dropaudio' && (track.testCount = (track.testCount || 0) + 1) % 43 < 17) {
+        value.close();
+        continue;
+      }
       try {
         handleAudio(s, track, value);
       } finally {
@@ -751,7 +756,14 @@ function handleAudio(s, track, data) {
   if (cap !== null && track.capOffset !== null) dg.maxLagUs = Math.max(dg.maxLagUs, arrival - (cap + track.capOffset));
   if (start !== null && track.wallNext !== null) {
     dg.resyncs++;
-    dg.gapUs += Math.max(0, start - track.wallNext);
+    const gap = Math.max(0, start - track.wallNext);
+    dg.gapUs += gap;
+    // Kayıtta ses kesintisi: arayüze hemen bildir (en fazla 3 sn'de bir).
+    const now = performance.now();
+    if (gap > 50000 && rec && !rec.paused && now - (track.lastGapPost || 0) > 3000) {
+      track.lastGapPost = now;
+      post('audio-gap', { ms: Math.round(gap / 1000), track: track.name });
+    }
   }
   if (start !== null) {
     track.segments.push({ enc: track.encTime, wall: start });

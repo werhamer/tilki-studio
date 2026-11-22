@@ -270,7 +270,7 @@ function render() {
   const codecName = { h264: 'H.264', hevc: 'HEVC', av1: 'AV1', vp9: 'VP9', vp8: 'VP8' };
   const audioMode = settings.recordMode === 'audio';
   $('chipFormat').textContent = audioMode
-    ? `M4A · AAC ${settings.audioBitrate} kbps`
+    ? `M4A · Opus ${Math.min(settings.audioBitrate, 256)} kbps`
     : `${settings.container.toUpperCase()} · ${settings.fps} fps`;
   const chipEncoder = $('chipEncoder');
   chipEncoder.hidden = !info || info.audioOnly;
@@ -393,6 +393,8 @@ async function toggleRecord() {
     await engine.startRecording();
     ui.state = 'recording';
     ui.diskWarned = false;
+    ui.audioProblem = false;
+    $('audioAlarm').hidden = true;
     api.log('info', `kayıt başladı ${engine.recFile && engine.recFile.name} ${JSON.stringify(engine.sessionInfo)}`);
     if (engine.sessionInfo && !engine.sessionInfo.audioOnly && !engine.sessionInfo.hardware && !ui.warnedSoft) {
       ui.warnedSoft = true;
@@ -934,6 +936,7 @@ function bindAudio() {
     }
     await save({ recordMode: mode });
     api.log('info', `kayıt türü: ${mode}`);
+    engine.setPreviewVisible(!ui.hidden && mode !== 'audio');
     // Ekran yakalamayı yeni moda göre (ses: 1 fps küçük, görüntü: tam) yeniden aç.
     if (engine.source && engine.sourceMode !== mode) {
       await chooseSource({ ...engine.source }, { quiet: true });
@@ -1451,6 +1454,21 @@ function bindEngine() {
     notifySystem(t('audio.micLost'), '');
     renderAudioCard();
   });
+  // Kayıtta ses kesintisi algılanırsa sessizce bozuk kayıt üretme: büyük uyarı + bildirim.
+  let lastAudioWarn = 0;
+  engine.addEventListener('audio-problem', (event) => {
+    if (ui.state !== 'recording') return;
+    const d = event.detail;
+    api.log('error', `ses sorunu: ${JSON.stringify(d)}`);
+    ui.audioProblem = true;
+    $('audioAlarm').hidden = false;
+    render();
+    const now = Date.now();
+    if (now - lastAudioWarn < 20000) return;
+    lastAudioWarn = now;
+    toast({ title: t('audio.problem'), sub: t('audio.problemSub'), kind: 'error', timeout: 20000 });
+    notifySystem(t('audio.problem'), t('audio.problemSub'));
+  });
   engine.addEventListener('mic-restored', () => {
     api.log('info', 'mikrofon yeniden bağlandı');
     toast({ title: t('audio.micRestored'), kind: 'ok' });
@@ -1509,7 +1527,8 @@ function bindEngine() {
   });
   api.on('window:visibility', (visible) => {
     ui.hidden = !visible;
-    engine.setPreviewVisible(visible);
+    // Sadece ses modunda önizleme sahnenin arkasında; hiç çizme.
+    engine.setPreviewVisible(visible && settings.recordMode !== 'audio');
   });
   api.on('app:closing', async () => {
     if (ui.closing) return;
@@ -1700,6 +1719,7 @@ async function selftest() {
     result.systemAudio = engine.systemAvailable;
     result.mic = !!engine.micStream;
     result.micNoise = engine.micNoiseActive;
+    result.audioSink = engine.audioSink;
     result.micTrackSettings = engine.micTrackSettings;
     result.outputLatencyMs = Math.round((beepCtx.outputLatency || 0) * 1000);
 
@@ -1800,6 +1820,8 @@ async function selftest() {
     await marker(); // duraklatmadan sonra, kayıtta ~4.5 sn (+hold)
     await wait(1200);
     result.stats = ui.stats;
+    result.renderRatio = engine.renderRatio;
+    result.audioProblem = !!ui.audioProblem;
     await stopRecord();
     result.recording = ui.lastFile;
     if (!result.recording) throw new Error(`kayıt kapanmadı: ${ui.lastError}`);

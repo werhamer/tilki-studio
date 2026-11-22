@@ -2,6 +2,13 @@
 
 ## 0.1.5
 
+- **Bilinen sorun (araştırılıyor):** bazı oturumlarda ses karıştırıcısı gerçek zamanın ~%65'i
+  kadar ses üretiyor ve kayıtta her ~0.43 sn'de ~0.17 sn'lik boşluk oluşuyor. Bu sürüm bunu
+  kayıt sırasında anında algılayıp uyarıyor; kalıcı çözüm (karıştırıcıdan bağımsız kayıt) sonraki sürümde.
+- **Kayıtta ses kesintisi uyarısı:** sesde boşluk algılanırsa sahnenin üstünde kırmızı
+  "SES KAYDINDA KESİNTİ VAR!" uyarısı ve Windows bildirimi çıkar; bozuk kayıt sessizce alınmaz.
+  Karıştırıcının hızı da 10 sn'de bir denetlenir.
+- Sadece ses modunda önizleme hiç çizilmiyor, buzlu cam efekti kaldırıldı.
 - **Sadece ses modu ekran kartından bağımsız.** Bu modda ekran yakalama yalnızca sistem sesi
   için açık tutuluyor ve 1 fps / 320×180'e iniyor (önceden 120 fps tam çözünürlük akıyordu).
   Ses Opus ile işlemcide kodlanıyor; Windows'ta AAC ekran kartı sürecinde çalıştığı için o süreç
