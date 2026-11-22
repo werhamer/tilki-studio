@@ -1,5 +1,24 @@
 # Değişiklik günlüğü
 
+## 0.1.7
+
+- **Düzeltme: GPU süreci çöktüğünde (exitCode 34) kayıt bölünmüyor.** Windows'ta GPU sürecinde
+  çalışan AAC ve donanım H.264/HEVC kodlayıcılar öldüğünde karıştırıcıdaki 6 saniyelik ses
+  tamponu ve Annex B anahtar kare yapısı sayesinde kodlayıcılar **aynı dosya içinde** canlı
+  yenilenir (GPU yeniden kalkamazsa video otomatik CPU kodlayıcıya geçer); ses tek örnek bile
+  kaybetmez.
+- **Kayıt öncesi 3.2 sn otomatik ses sağlığı kontrolü:** Kayda basıldığında mikrofonun gerçek
+  zamanlı örnek akışı, zaman damgası sürekliliği, RNNoise hazırlığı ve ses kodlayıcı canlı
+  ölçülür; sorun varsa bozuk kayıt üretmek yerine nedenini ve çözüm adımlarını gösterir.
+- **Kayıt sırasında anlık örnek hızı ve kesinti koruması:** Mikrofon zaman damgası sıçraması
+  (>45 ms), veri durması (>400 ms) veya 2 sn'lik pencerede düşük örnek hızı (<%95) anında büyük
+  kırmızı uyarı ve bildirim üretir. Windows sistem sesinin (WASAPI loopback) sessizken paket
+  göndermemesi yanlış alarm üretmez.
+- **Faz-sürekli yeniden örnekleme ve tavan koruması:** 44,1 kHz -> 48 kHz dönüşümündeki parça
+  sınırı faz kayması giderildi; yüksek kazançta (>%100) dijital kırpılma (cızırtı) önlendi.
+- **3 düğümlü tanı günlüğü ve güç koruması:** Yakalama, karıştırıcı ve kodlayıcı düğümleri
+  ayrı ayrı gerçek saatle karşılaştırılır; kayıt sırasında Windows güç kısıtlaması engellenir.
+
 ## 0.1.6
 
 - **Düzeltme: kayıtlarda sesin ~%35'i kayboluyordu (her ~0.43 sn'de ~0.17 sn boşluk).**

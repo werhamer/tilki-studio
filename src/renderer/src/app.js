@@ -226,7 +226,7 @@ function render() {
   const recStats = stats && stats.rec;
 
   const recBtn = $('btnRec');
-  recBtn.classList.toggle('recording', recording || ui.state === 'countdown');
+  recBtn.classList.toggle('recording', recording || ui.state === 'countdown' || ui.state === 'checking');
   recBtn.disabled = busy;
   $('stage').classList.toggle('audio-mode', settings.recordMode === 'audio');
   $('btnPause').disabled = !recording;
@@ -243,6 +243,7 @@ function render() {
   timer.classList.toggle('paused', paused);
 
   let label = t(engine.source || settings.recordMode === 'audio' ? 'state.ready' : 'state.noSource');
+  if (ui.state === 'checking') label = t('state.checkingAudio');
   if (ui.state === 'starting' || ui.state === 'countdown') label = t('state.starting');
   if (ui.state === 'saving') label = t('state.saving');
   if (recording) label = `${t(paused ? 'state.paused' : 'state.recording')} · ${engine.recFile ? engine.recFile.name : ''}`;
@@ -350,10 +351,44 @@ function runCountdown(seconds) {
   });
 }
 
+function describeAudioHealth(h) {
+  const codec = (h && h.encoderCodec ? h.encoderCodec.toUpperCase() : 'OK');
+  if (!h) return { state: 'bad', text: t('health.encoderBad'), buttons: [] };
+  if (h.ok) {
+    return {
+      state: 'ok',
+      text: h.micChecked === false
+        ? t('health.off', { codec })
+        : t('health.ok', { ratio: h.ratioPct ?? 100, codec }),
+      buttons: [],
+    };
+  }
+  const soundBtn = { label: t('perm.openSettings'), run: () => api.openSystemSettings('sound') };
+  const resetBtn = {
+    label: t('health.resetMic'),
+    run: async () => {
+      await engine.refreshMic({ quiet: true });
+      renderAudioCard();
+      runPermissionCheck({ show: true, retry: true });
+    },
+  };
+  if (h.code === 'mic-no-data') return { state: 'bad', text: t('health.noData'), buttons: [resetBtn, soundBtn] };
+  if (h.code === 'mic-rate-low') return { state: 'bad', text: t('health.rateLow', { ratio: h.ratioPct ?? 0 }), buttons: [resetBtn, soundBtn] };
+  if (h.code === 'mic-gaps') return { state: 'bad', text: t('health.gaps', { gaps: h.gapCount ?? 1, ms: h.maxGapMs ?? 0 }), buttons: [resetBtn, soundBtn] };
+  if (h.code === 'rnnoise-failed') return { state: 'bad', text: t('health.rnnoiseBad'), buttons: [resetBtn] };
+  return { state: 'bad', text: t('health.encoderBad'), buttons: [soundBtn] };
+}
+
 async function toggleRecord() {
   if (ui.state === 'recording') return stopRecord();
   if (ui.state === 'countdown') {
     if (ui.countdownCancel) ui.countdownCancel();
+    return;
+  }
+  if (ui.state === 'checking') {
+    engine.cancelAudioHealth();
+    ui.state = 'idle';
+    render();
     return;
   }
   if (ui.state !== 'idle') return;
@@ -362,9 +397,8 @@ async function toggleRecord() {
     toast({ title: t('toast.noSource'), kind: 'info' });
     return;
   }
+  if (settings.mic.enabled && !engine.micStream) await engine.refreshMic({ quiet: true });
   if (audioOnly) {
-    // Mikrofon açık ama bağlı değilse (izin yeni verildiyse) bir kez daha dene.
-    if (settings.mic.enabled && !engine.micStream) await engine.refreshMic();
     const micOn = settings.mic.enabled && !!engine.micStream;
     const sysOn = settings.system.enabled && engine.systemAvailable;
     if (!micOn && !sysOn) {
@@ -374,15 +408,48 @@ async function toggleRecord() {
   }
   if (ui.cropEdit) endCropEdit(false);
   engine.resumeAudio();
+  if (!audioOnly) engine.prepareVideo();
+
+  // Kayıt başlamadan önce 3–5 sn otomatik ses sağlığı kontrolü: geri sayım açıksa
+  // geri sayımla paralel çalışır; değilse doğrudan 3.2 sn canlı denetim yapılır.
+  const stOpts = (SELFTEST && settings.selftest) || {};
+  const skipHealth = !!stOpts.skipHealth;
+  const healthMs = SELFTEST ? (stOpts.healthMs ?? 3000) : 3200;
+  let healthPromise = skipHealth ? Promise.resolve({ ok: true, code: 'skipped' }) : null;
 
   if (settings.countdown > 0 && !SELFTEST) {
-    engine.prepareVideo();
+    if (!healthPromise) healthPromise = engine.checkAudioHealth({ durationMs: Math.max(3000, Math.min(5000, settings.countdown * 1000)) });
     ui.state = 'countdown';
     render();
     const ok = await runCountdown(settings.countdown);
     if (!ok) {
+      engine.cancelAudioHealth();
       ui.state = 'idle';
       render();
+      return;
+    }
+  }
+
+  if (!skipHealth) {
+    ui.state = 'checking';
+    render();
+    const health = await (healthPromise || engine.checkAudioHealth({ durationMs: healthMs })).catch((err) => ({
+      ok: false,
+      code: errorCode(err),
+    }));
+    ui.lastHealth = health;
+    if (health && health.cancelled) {
+      ui.state = 'idle';
+      render();
+      return;
+    }
+    if (!health || !health.ok) {
+      ui.state = 'idle';
+      ui.lastError = (health && health.code) || 'audio-health-failed';
+      render();
+      toast({ title: t('health.blocked'), sub: describeAudioHealth(health).text, kind: 'error', timeout: 15000 });
+      notifySystem(t('health.blocked'), '');
+      if (!SELFTEST) runPermissionCheck({ show: true, precomputedHealth: health });
       return;
     }
   }
@@ -395,6 +462,7 @@ async function toggleRecord() {
     ui.diskWarned = false;
     ui.audioProblem = false;
     $('audioAlarm').hidden = true;
+    $('audioAlarmSub').textContent = t('audio.problemSub');
     api.log('info', `kayıt başladı ${engine.recFile && engine.recFile.name} ${JSON.stringify(engine.sessionInfo)}`);
     if (engine.sessionInfo && !engine.sessionInfo.audioOnly && !engine.sessionInfo.hardware && !ui.warnedSoft) {
       ui.warnedSoft = true;
@@ -1362,7 +1430,11 @@ function bindUi() {
   window.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     if (ui.countdownCancel) ui.countdownCancel();
-    else if (!$('pickerModal').hidden || !$('playerModal').hidden) closeModals();
+    else if (ui.state === 'checking') {
+      engine.cancelAudioHealth();
+      ui.state = 'idle';
+      render();
+    } else if (!$('pickerModal').hidden || !$('playerModal').hidden) closeModals();
     else if (ui.cropEdit) endCropEdit(false);
   });
 
@@ -1458,16 +1530,22 @@ function bindEngine() {
   let lastAudioWarn = 0;
   engine.addEventListener('audio-problem', (event) => {
     if (ui.state !== 'recording') return;
-    const d = event.detail;
+    const d = event.detail || {};
     api.log('error', `ses sorunu: ${JSON.stringify(d)}`);
     ui.audioProblem = true;
+    ui.lastAudioProblem = d;
+    let sub = t('audio.problemSub');
+    if (d.kind === 'rate' && d.ratio != null) sub = t('audio.problemRate', { ratio: d.ratio });
+    else if (d.kind === 'stall' && d.ms != null) sub = t('audio.problemStall', { ms: d.ms });
+    else if (d.ms != null) sub = t('audio.problemGap', { ms: d.ms });
+    $('audioAlarmSub').textContent = sub;
     $('audioAlarm').hidden = false;
     render();
     const now = Date.now();
-    if (now - lastAudioWarn < 20000) return;
+    if (now - lastAudioWarn < 15000) return;
     lastAudioWarn = now;
-    toast({ title: t('audio.problem'), sub: t('audio.problemSub'), kind: 'error', timeout: 20000 });
-    notifySystem(t('audio.problem'), t('audio.problemSub'));
+    toast({ title: t('audio.problem'), sub, kind: 'error', timeout: 20000 });
+    notifySystem(t('audio.problem'), sub);
   });
   engine.addEventListener('mic-restored', () => {
     api.log('info', 'mikrofon yeniden bağlandı');
@@ -1530,6 +1608,9 @@ function bindEngine() {
     // Sadece ses modunda önizleme sahnenin arkasında; hiç çizme.
     engine.setPreviewVisible(visible && settings.recordMode !== 'audio');
   });
+  api.on('gpu:crashed', (details) => {
+    api.log('error', `GPU süreci çöktü, kayıt kodlayıcıları aynı dosyada kurtarılıyor: ${JSON.stringify(details)}`);
+  });
   api.on('app:closing', async () => {
     if (ui.closing) return;
     ui.closing = true;
@@ -1582,7 +1663,7 @@ function runPermissionCheck(opts = {}) {
   return permRun;
 }
 
-async function checkPermissionsNow({ show = false, retry = false } = {}) {
+async function checkPermissionsNow({ show = false, retry = false, precomputedHealth = null } = {}) {
   const list = $('permList');
   if (show) {
     list.textContent = '';
@@ -1636,6 +1717,11 @@ async function checkPermissionsNow({ show = false, retry = false } = {}) {
     mic = { state: 'bad', text: t('perm.micBusy'), buttons: [micSettings] };
   }
   rows.push({ title: t('perm.mic'), ...mic });
+
+  if (show || precomputedHealth) {
+    const health = precomputedHealth || await engine.checkAudioHealth({ durationMs: 3000 }).catch(() => null);
+    rows.push({ title: t('health.title'), ...describeAudioHealth(health) });
+  }
 
   const out = res.output || {};
   const folderBtn = { label: t('perm.chooseFolder'), run: chooseFolderAndRecheck };
@@ -1777,8 +1863,21 @@ async function selftest() {
       engine.settings = settings;
     }
     await toggleRecord(); // arayüzdeki kayıt düğmesiyle aynı yol
+    result.audioHealth = ui.lastHealth || null;
+    if (opts.expectHealthBlock) {
+      result.blockedAsExpected = ui.state === 'idle' && !!(ui.lastHealth && !ui.lastHealth.ok);
+      result.ok = result.blockedAsExpected;
+      api.selftestDone(result);
+      return;
+    }
     if (ui.state !== 'recording') throw new Error(`kayıt başlamadı: ${ui.lastError}`);
     result.session = engine.sessionInfo;
+    if (opts.crashGpu) {
+      await wait(1800);
+      result.gpuCrashed = await api.crashGpuForTest();
+      await wait(2800);
+      result.sessionAfterGpuCrash = engine.sessionInfo;
+    }
     if (opts.micDrop && engine.micStream) {
       // Mikrofonun kayıt ortasında kopmasını taklit et; otomatik geri bağlanmalı.
       result.micEvents = [];
@@ -1792,10 +1891,12 @@ async function selftest() {
     await wait(1500);
     await marker(); // ~1.5 sn
     await wait(1200);
-    engine.pauseRecording();
-    await wait(1500);
-    engine.resumeRecording();
-    await wait(1500);
+    if (!opts.noPause) {
+      engine.pauseRecording();
+      await wait(1500);
+      engine.resumeRecording();
+      await wait(1500);
+    }
     if (opts.hold) {
       // hold: uzun kayıt testi; bu aralıkta süreç bazında işlemci kullanımı ölçülür
       const before = await api.metrics();
@@ -1831,15 +1932,16 @@ async function selftest() {
       engine.settings = settings;
     }
 
-    await engine.setReplay(true);
-    await wait(6000);
-    result.replayStats = ui.stats;
-    result.replay = await engine.saveReplay();
-    await engine.setReplay(false);
-
-    result.shot = await engine.screenshot();
+    if (!opts.noReplay) {
+      await engine.setReplay(true);
+      await wait(6000);
+      result.replayStats = ui.stats;
+      result.replay = await engine.saveReplay();
+      await engine.setReplay(false);
+      result.shot = await engine.screenshot();
+      result.codecs = await engine.probe();
+    }
     result.sessionEnded = !engine.sessionActive;
-    result.codecs = await engine.probe();
     result.ok = true;
   } catch (err) {
     result.error = String((err && err.stack) || err);

@@ -3,7 +3,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 const invoke = (channel) => (...args) => ipcRenderer.invoke(channel, ...args);
-const EVENTS = new Set(['hotkey', 'window:visibility', 'app:closing', 'tray:action']);
+const EVENTS = new Set(['hotkey', 'window:visibility', 'app:closing', 'tray:action', 'gpu:crashed']);
 
 contextBridge.exposeInMainWorld('tilki', {
   appInfo: invoke('app:info'),
@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('tilki', {
 
   readyToClose: () => ipcRenderer.send('app:ready-to-close'),
   selftestDone: (result) => ipcRenderer.send('selftest:done', result),
+  crashGpuForTest: invoke('test:crash-gpu'),
 
   on(channel, callback) {
     if (!EVENTS.has(channel)) return;

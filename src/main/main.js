@@ -10,7 +10,7 @@
  */
 const {
   app, BrowserWindow, ipcMain, desktopCapturer, session, globalShortcut,
-  Tray, Menu, shell, dialog, nativeImage, screen, protocol, systemPreferences,
+  Tray, Menu, shell, dialog, nativeImage, screen, protocol, systemPreferences, powerSaveBlocker,
 } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -237,7 +237,22 @@ let win = null;
 let tray = null;
 let store = null;
 let forceClose = false;
+let powerBlockId = null;
 let appState = { recording: false, paused: false, replay: false };
+
+function syncPowerBlocker() {
+  const need = !!(appState.recording || appState.replay);
+  if (need && powerBlockId === null) {
+    try {
+      powerBlockId = powerSaveBlocker.start('prevent-display-sleep');
+    } catch {}
+  } else if (!need && powerBlockId !== null) {
+    try {
+      if (powerSaveBlocker.isStarted(powerBlockId)) powerSaveBlocker.stop(powerBlockId);
+    } catch {}
+    powerBlockId = null;
+  }
+}
 let trayLabels = { show: 'Göster', start: 'Kaydı başlat', stop: 'Kaydı durdur', quit: 'Çıkış' };
 const openFiles = new Map();
 const rescuedFiles = []; // arayüz çökerse yarım kalan kayıtlar (yeniden yüklenince bildirilir)
@@ -444,6 +459,7 @@ function createWindow() {
         }
       }
       appState = { recording: false, paused: false, replay: false };
+      syncPowerBlocker();
       refreshTray();
       setTimeout(() => win && !win.isDestroyed() && win.reload(), 500);
     }
@@ -800,12 +816,27 @@ function registerIpc() {
   ipcMain.handle('state:update', (_e, next) => {
     const wasRecording = appState.recording;
     appState = { ...appState, ...next };
+    syncPowerBlocker();
     refreshTray();
     if (win && !win.isDestroyed()) {
       win.setTitle(appState.recording ? 'Tilki Studio — REC' : 'Tilki Studio');
       if (!wasRecording && appState.recording && store.get().minimizeOnRecord) win.minimize();
     }
   });
+
+  if (ISOLATED) {
+    // Otomatik test: GPU sürecinin çökmesini (exitCode 34) gerçek süreç öldürmeyle sınar.
+    ipcMain.handle('test:crash-gpu', () => {
+      const gpu = app.getAppMetrics().find((m) => m.type === 'GPU');
+      if (!gpu || !gpu.pid) return false;
+      try {
+        process.kill(gpu.pid);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  }
 
   ipcMain.handle('tray:labels', (_e, labels) => {
     trayLabels = { ...trayLabels, ...labels };
@@ -843,7 +874,12 @@ if (!app.requestSingleInstanceLock()) {
   // Uygulama ikinci kez açılırsa var olan pencereyi öne getir; pencere yoksa
   // (örneğin önceki kapanış yarım kaldıysa) yenisini aç.
   app.on('second-instance', () => (win && !win.isDestroyed() ? showWindow() : createWindow()));
-  app.on('child-process-gone', (_e, details) => console.error(`[child-process-gone] ${JSON.stringify(details)}`));
+  app.on('child-process-gone', (_e, details) => {
+    console.error(`[child-process-gone] ${JSON.stringify(details)}`);
+    if (details && details.type === 'GPU' && win && !win.isDestroyed()) {
+      win.webContents.send('gpu:crashed', details);
+    }
+  });
 
   app.whenReady().then(() => {
     openLog();
@@ -877,6 +913,8 @@ if (!app.requestSingleInstanceLock()) {
     setTimeout(() => app.exit(0), 4000);
   });
   app.on('will-quit', () => {
+    appState = { recording: false, paused: false, replay: false };
+    syncPowerBlocker();
     globalShortcut.unregisterAll();
     for (const entry of openFiles.values()) entry.handle.close().catch(() => {});
   });

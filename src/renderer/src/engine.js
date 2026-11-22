@@ -3,8 +3,6 @@
  * Ekranı, kamerayı ve sesi yakalar; kareleri worker'a aktarır; ses mikserini yönetir.
  */
 
-import { RnnoiseWorkletNode, loadRnnoise } from '@sapphi-red/web-noise-suppressor';
-
 const api = window.tilki;
 
 // Mikrofon gürültü engelleme seviyesi. Eski sürümlerde yalnızca açık/kapalı vardı.
@@ -140,8 +138,8 @@ export class Engine extends EventTarget {
       if (!this.recording) return;
       const ok = ratio > 0.97 && ratio < 1.03;
       api.log(ok ? 'info' : 'error',
-        `[karıştırıcı] hız ${(ratio * 100).toFixed(1)}% (çıkış: ${this.audioSink}, durum: ${this.audio.state})`);
-      // Kayıt sesi artık bu saate bağlı değil; yalnızca bilgi olarak yazılır.
+        `[webaudio-gösterge-saati] hız ${(ratio * 100).toFixed(1)}% (çıkış: ${this.audioSink}, durum: ${this.audio.state})`);
+      // Kayıt sesi bu saatten tamamen bağımsızdır; tanı amaçlı karşılaştırma olarak yazılır.
     }, 10000);
   }
 
@@ -186,9 +184,19 @@ export class Engine extends EventTarget {
         break;
       case 'noise-state':
         this.rnnoiseActive = !!msg.strong;
+        if (msg.failed) {
+          this.micNoiseActive = 'off';
+          this.emit('noise-fallback', {});
+        }
+        break;
+      case 'session-updated':
+        if (msg.info && this.sessionInfo) {
+          this.sessionInfo = msg.info;
+          this.emit('session', this.sessionInfo);
+        }
         break;
       case 'audio-gap':
-        this.emit('audio-problem', { kind: 'gap', ms: msg.ms, track: msg.track });
+        this.emit('audio-problem', { kind: msg.kind || 'gap', ms: msg.ms, ratio: msg.ratio, track: msg.track });
         break;
       case 'stats':
         if (msg.stats && msg.stats.rec) this.recDuration = msg.stats.rec.duration;
@@ -363,34 +371,10 @@ export class Engine extends EventTarget {
     }, 3000);
   }
 
-  // RNNoise (güçlü gürültü engelleme) bir kez yüklenir. Yüklenemezse null döner ve
-  // mikrofon normal gürültü engellemeyle çalışmaya devam eder; kayıt gecikmez.
-  loadRnnoise() {
-    if (!this.rnnoiseReady) {
-      this.rnnoiseReady = (async () => {
-        const wasm = await loadRnnoise({ url: 'dist/rnnoise/rnnoise.wasm', simdUrl: 'dist/rnnoise/rnnoise_simd.wasm' });
-        await this.audio.audioWorklet.addModule('dist/rnnoise/workletProcessor.js');
-        return wasm;
-      })().catch((err) => {
-        console.error('[rnnoise]', err);
-        this.rnnoiseReady = null;
-        return null;
-      });
-    }
-    return this.rnnoiseReady;
-  }
-
   async openMic({ quiet = false } = {}) {
     const cfg = this.settings.mic;
     if (this.mic.node) this.mic.node.disconnect();
     this.mic.node = null;
-    if (this.mic.fx) {
-      this.mic.fx.disconnect();
-      try {
-        this.mic.fx.destroy();
-      } catch {}
-      this.mic.fx = null;
-    }
     stopStream(this.micStream);
     this.micStream = null;
     if (!cfg.enabled) {
@@ -713,6 +697,24 @@ export class Engine extends EventTarget {
     if (!this.screenStream) throw new Error('no-source');
     const result = await this.call('screenshot');
     return api.saveImage(new Uint8Array(result.buffer));
+  }
+
+  // Kayıt başlamadan önce ses zincirinin (mikrofon örnek hızı, zaman damgası sürekliliği,
+  // RNNoise ve ses kodlayıcı) gerçekten sağlıklı çalıştığını 3–5 sn canlı ölçer.
+  async checkAudioHealth({ durationMs = 3200 } = {}) {
+    const s = this.settings;
+    const audioOnly = s.recordMode === 'audio';
+    const order = audioOnly ? CODEC_ORDER.mp4 : CODEC_ORDER[s.container] || CODEC_ORDER.mp4;
+    return this.call('audio-health', {
+      durationMs,
+      micEnabled: !!(s.mic.enabled && this.micStream),
+      audioOrder: audioOnly ? ['opus', 'aac'] : order.audio,
+      audioBitrate: s.audioBitrate * 1000,
+    });
+  }
+
+  cancelAudioHealth() {
+    this.send('audio-health-cancel');
   }
 
   probe() {

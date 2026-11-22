@@ -289,7 +289,10 @@ function encodeFrame(s, time, rect) {
   const n = Math.max(1, Math.round((time - s.t0) / s.interval) + 1);
   if (n <= s.lastN) return;
   s.lastN = n;
-  if (s.venc.state !== 'configured') return;
+  if (s.videoRecovering || !s.venc || s.venc.state !== 'configured') {
+    s.dropped++;
+    return;
+  }
   if (s.venc.encodeQueueSize > Math.max(10, s.fps / 2)) {
     // Kodlayıcı yarım saniyeden fazla geride: bellek şişmesin diye kareyi bırak.
     s.dropped++;
@@ -319,6 +322,8 @@ function encodeFrame(s, time, rect) {
   try {
     s.venc.encode(frame, { keyFrame: key });
     s.frames++;
+  } catch (err) {
+    recoverVideoEncoder(s, err);
   } finally {
     frame.close();
   }
@@ -372,8 +377,11 @@ function videoConfig(codec, str, w, h, fps, bitrate, hw) {
     latencyMode: 'realtime',
     bitrateMode: 'variable',
   };
-  if (codec === 'h264') cfg.avc = { format: 'avc' };
-  if (codec === 'hevc') cfg.hevc = { format: 'hevc' };
+  // Annex B biçimi: anahtar karelerin içinde SPS/PPS satır içi taşınır; böylece GPU
+  // süreci çöküp kodlayıcı (donanım ya da CPU yedeğiyle) yeniden açıldığında kayıt
+  // aynı dosyada bölünmeden sürer.
+  if (codec === 'h264') cfg.avc = { format: 'annexb' };
+  if (codec === 'hevc') cfg.hevc = { format: 'annexb' };
   return cfg;
 }
 
@@ -430,7 +438,7 @@ function tryVideoEncoder(cand, canvas, fps, signal) {
       },
       error: (err) => {
         if (video.owner && session === video.owner) {
-          post('fatal', { message: `video: ${err && err.message}` });
+          recoverVideoEncoder(video.owner, err);
         }
         finish(false);
       },
@@ -475,6 +483,58 @@ async function findVideoEncoder({ w, h, fps, videoOrder, quality }, signal) {
     if (video) return video;
   }
   return null;
+}
+
+const waitMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// GPU süreci çökerse (exitCode 34) video kodlayıcıyı kaydı bölmeden aynı dosyada yeniler:
+// önce yeniden kalkan GPU'yu, olmazsa işlemci (prefer-software) kodlayıcısını dener.
+async function recoverVideoEncoder(s, err) {
+  if (!s || session !== s || s.audioOnly || s.videoRecovering) return;
+  s.videoRecovering = true;
+  const targetCodec = s.video ? s.video.codec : 'h264';
+  try {
+    if (s.venc && s.venc.state !== 'closed') s.venc.close();
+  } catch {}
+  s.venc = null;
+  post('log', {
+    level: 'error',
+    message: `[video kodlayıcı] hata (${(err && err.message) || err}); aynı dosyada kurtarılıyor…`,
+  });
+  for (const delay of [100, 300, 800, 1800]) {
+    await waitMs(delay);
+    if (session !== s) return;
+    try {
+      const next = await findVideoEncoder({
+        w: s.width,
+        h: s.height,
+        fps: s.fps,
+        videoOrder: [targetCodec],
+        quality: config.quality,
+      });
+      if (session !== s) {
+        if (next && next.encoder.state !== 'closed') next.encoder.close();
+        return;
+      }
+      if (next) {
+        next.owner = s;
+        s.video = next;
+        s.venc = next.encoder;
+        s.vConfig = next.decoderConfig;
+        s.forceKey = true;
+        s.vRecoveries = (s.vRecoveries || 0) + 1;
+        s.videoRecovering = false;
+        post('log', {
+          level: 'info',
+          message: `[video kodlayıcı] kurtarıldı: ${next.codec} ${next.hw ? 'GPU' : 'CPU'} (kurtarma #${s.vRecoveries})`,
+        });
+        post('session-updated', { info: sessionInfo() });
+        return;
+      }
+    } catch {}
+  }
+  s.videoRecovering = false;
+  if (session === s) post('fatal', { message: `video: ${(err && err.message) || 'encoder-lost'}` });
 }
 
 function videoRequest() {
@@ -616,24 +676,31 @@ async function openSession(msg, request) {
     const audio = await audioSupported;
     if (msg.outputs.length && !audio) throw new Error('no-audio-encoder');
     s.aCodec = audio?.codec ?? null;
+    s.audioOrder = msg.audioOrder;
+    s.audioBitrate = msg.audioBitrate;
+    s.vRecoveries = 0;
+    s.videoRecovering = false;
     s.timing.audioPicked = Math.round(performance.now() - s.timing.start);
 
     msg.outputs.forEach((output, index) => {
       const track = {
-        name: output.name, sources: output.sources, enc: null, config: null,
-        encTime: 0, segments: [], mix: newMix(),
+        name: output.name,
+        sources: output.sources,
+        audioCfg: audio.cfg,
+        enc: null,
+        fail: null,
+        config: null,
+        encTime: 0,
+        confirmedEncUs: 0,
+        emittedFrames: 0,
+        recovering: false,
+        recoveries: 0,
+        segments: [],
+        mix: newMix(),
+        encDiag: newEncDiag(),
       };
-      track.enc = new AudioEncoder({
-        output: (chunk, meta) => {
-          if (meta && meta.decoderConfig) track.config = meta.decoderConfig;
-          if (session === s) onAudioChunk(s, index, chunk);
-        },
-        error: (err) => {
-          if (session === s) post('fatal', { message: `audio: ${err && err.message}` });
-        },
-      });
       s.audio.push(track);
-      track.enc.configure(audio.cfg);
+      openTrackEncoder(s, track, index, audio.cfg);
     });
 
     s.t0 = performance.now();
@@ -659,8 +726,79 @@ function sessionInfo() {
     videoBitrate: s.video ? s.video.bitrate : 0,
     audioOnly: !!s.audioOnly,
     audioCodec: s.aCodec,
+    vRecoveries: s.vRecoveries || 0,
+    aRecoveries: s.audio.reduce((sum, a) => sum + (a.recoveries || 0), 0),
     timing: s.timing,
   };
+}
+
+function openTrackEncoder(s, track, index, cfg) {
+  let dead = false;
+  let enc = null;
+  const fail = (err) => {
+    if (dead || session !== s) return;
+    dead = true;
+    try {
+      if (enc && enc.state !== 'closed') enc.close();
+    } catch {}
+    recoverAudioTrack(s, track, index, err);
+  };
+  enc = new AudioEncoder({
+    output: (chunk, meta) => {
+      if (meta && meta.decoderConfig) track.config = meta.decoderConfig;
+      track.confirmedEncUs = Math.max(track.confirmedEncUs, chunk.timestamp + (chunk.duration || 0));
+      if (session === s) onAudioChunk(s, index, chunk);
+    },
+    error: fail,
+  });
+  enc.configure(cfg);
+  track.enc = enc;
+  track.fail = fail;
+}
+
+// Windows'ta MediaFoundation AAC kodlayıcı GPU sürecinde çalışır; GPU süreci çöktüğünde
+// (exitCode 34) kodlayıcı ölür. Halka tampondaki PCM verisi korunduğu için yeni GPU
+// süreci kalkar kalkmaz aynı kodekle yeni kodlayıcı açılır ve kayıt tek örnek bile
+// kaybetmeden AYNI DOSYADA kesintisiz devam eder.
+async function recoverAudioTrack(s, track, index, err) {
+  if (!s || session !== s || track.recovering) return;
+  track.recovering = true;
+  const lostUs = Math.max(0, Math.min(900000, track.encTime - track.confirmedEncUs));
+  const lostFrames = Math.round((lostUs * SR) / 1e6);
+  if (track.mix.emitted !== null && lostFrames > 0) {
+    const rewound = Math.max(track.mix.minKept, track.mix.emitted - lostFrames);
+    const rewoundFrames = track.mix.emitted - rewound;
+    if (rewoundFrames > 0) {
+      track.mix.emitted = rewound;
+      track.encTime = Math.max(track.confirmedEncUs, track.encTime - (rewoundFrames / SR) * 1e6);
+    }
+  }
+  post('log', {
+    level: 'error',
+    message: `[kodlayıcı ${track.name}] hata (${(err && err.message) || err}); aynı dosyada kurtarılıyor…`,
+  });
+  for (const delay of [60, 180, 450, 1000, 2000]) {
+    await waitMs(delay);
+    if (session !== s) return;
+    try {
+      const r = await withTimeout(AudioEncoder.isConfigSupported(track.audioCfg), QUERY_TIMEOUT);
+      if (r === 'timeout' || !r.supported) continue;
+      openTrackEncoder(s, track, index, track.audioCfg);
+      if (track.enc && track.enc.state === 'configured') {
+        track.recovering = false;
+        track.recoveries++;
+        post('log', {
+          level: 'info',
+          message: `[kodlayıcı ${track.name}] kurtarıldı (kurtarma #${track.recoveries})`,
+        });
+        post('session-updated', { info: sessionInfo() });
+        flushAudio(s, performance.now());
+        return;
+      }
+    } catch {}
+  }
+  track.recovering = false;
+  if (session === s) post('fatal', { message: `audio: ${(err && err.message) || 'encoder-lost'}` });
 }
 
 async function stopSession() {
@@ -700,7 +838,9 @@ function updateEncoding() {
 // (varsayılan hoparlör) gerçek kullanımda aksadığında kayıtların ~%35'i boşluk oluyordu.
 
 const SR = 48000;
-const RING = SR * 4; // karıştırma tamponu: 4 sn
+const RING = SR * 6; // karıştırma tamponu: 6 sn (1 sn geriye dönük kurtarma + 5 sn ileri tampon)
+const KEEP_TAIL = SR; // kodlayıcı çökerse uçuşta kalan paketleri geri sarmak için tutulan kuyruk
+const WRITE_HEAD = RING - KEEP_TAIL;
 const BLOCK = 960; // kodlayıcıya 20 ms'lik bloklar
 const LIVE_MS = 400; // bu kadar süre veri gelmeyen girdi "sessiz" sayılır, beklenmez
 const RESYNC_FRAMES = Math.round(SR * 0.04); // 40 ms'den büyük sapmada yeniden hizala
@@ -710,26 +850,65 @@ const gains = { mic: 1, sys: 1 };
 let noiseStrong = false;
 let rnnoiseEntry = null;
 let rnnoiseLoading = null;
+let healthProbe = null;
 
 function newMix() {
   return {
     l: new Float32Array(RING),
     r: new Float32Array(RING),
     emitted: null,
+    clearedTo: null,
+    minKept: 0,
     filled: {},
     lastAt: {},
     segOpen: false,
   };
 }
 
+function advanceRingClear(mx) {
+  if (mx.emitted === null) return;
+  const target = mx.emitted + WRITE_HEAD;
+  if (mx.clearedTo === null) {
+    mx.clearedTo = target;
+    mx.minKept = mx.emitted;
+    return;
+  }
+  if (target <= mx.clearedTo) return;
+  const span = target - mx.clearedTo;
+  if (span >= RING) {
+    mx.l.fill(0);
+    mx.r.fill(0);
+  } else {
+    for (let p = mx.clearedTo; p < target; p++) {
+      const idx = p % RING;
+      mx.l[idx] = 0;
+      mx.r[idx] = 0;
+    }
+  }
+  mx.clearedTo = target;
+  mx.minKept = Math.max(mx.minKept, target - RING);
+}
+
 function newDiag() {
-  return { frames: 0, chunks: 0, resyncs: 0, gapFrames: 0, maxLagMs: 0, since: performance.now() };
+  return {
+    frames: 0, chunks: 0, resyncs: 0, gapFrames: 0, maxLagMs: 0,
+    firstCapUs: null, lastCapUs: null, lastDurUs: 0, prevCapEndUs: null, maxPtsJumpMs: 0,
+    since: performance.now(),
+  };
+}
+
+function newEncDiag() {
+  return {
+    pkts: 0, audioS: 0, firstPts: null, lastPts: null, lastDur: 0, prevEnd: null, maxGapMs: 0,
+    emittedFrames: 0, since: performance.now(),
+  };
 }
 
 function resetAudioTimeline(s) {
   for (const track of s.audio) {
     const old = track.mix;
     track.mix = newMix();
+    track.encDiag = newEncDiag();
     old.l = null;
     old.r = null;
   }
@@ -737,6 +916,8 @@ function resetAudioTimeline(s) {
     if (!inp) continue;
     inp.anchored = false;
     inp.diag = newDiag();
+    inp.rateWinGotMs = 0;
+    inp.rateWinSince = performance.now();
   }
 }
 
@@ -816,7 +997,11 @@ function makeDenoiser(entry) {
 
 function attachDenoiser(inp) {
   loadRnnoiseEntry().then((entry) => {
-    if (!entry || inp.dead || !noiseStrong || inp.ns) return;
+    if (!entry) {
+      if (noiseStrong) post('noise-state', { strong: false, failed: true });
+      return;
+    }
+    if (inp.dead || !noiseStrong || inp.ns) return;
     inp.ns = makeDenoiser(entry);
     post('noise-state', { strong: true });
   });
@@ -839,9 +1024,14 @@ function setInput(kind, readable) {
   }
   inputs[kind] = null;
   if (!readable) return;
+  const now = performance.now();
   const inp = {
     kind, reader: null, dead: false, anchored: false, useCap: false, offset: 0, nextPos: 0,
-    lastArrival: 0, ns: null, rsPhase: 0, diag: newDiag(),
+    lastArrival: 0, ns: null, sampleRate: SR,
+    rsHasPrev: false, rsPrevL: 0, rsPrevR: 0, rsPos: 0,
+    hLastCapUs: null, hLastDurMs: 0, hLastAt: null,
+    rateWinGotMs: 0, rateWinSince: now,
+    diag: newDiag(),
   };
   inputs[kind] = inp;
   if (kind === 'mic' && noiseStrong) attachDenoiser(inp);
@@ -878,28 +1068,86 @@ async function pumpInput(inp, readable) {
   }
 }
 
-// Doğrusal örnekleme hızı dönüştürücü (girdi 48 kHz değilse; normalde gerekmez).
+// Faz-sürekli doğrusal örnekleme hızı dönüştürücü (ör. 44,1 kHz -> 48 kHz).
+// Parça sınırlarında önceki örneği (rsPrevL/R) ve kesirli fazı (rsPos) korur;
+// sınır çıtırtısı veya saat kayması üretmez.
 function resample(inp, L, R, rate) {
+  const N = L.length;
+  if (!N) return [L, R];
   const ratio = rate / SR;
-  const n = Math.floor((L.length - inp.rsPhase) / ratio);
-  const oL = new Float32Array(Math.max(0, n));
-  const oR = new Float32Array(Math.max(0, n));
-  for (let i = 0; i < n; i++) {
-    const x = inp.rsPhase + i * ratio;
+  if (!inp.rsHasPrev) {
+    inp.rsPrevL = L[0];
+    inp.rsPrevR = R[0];
+    inp.rsHasPrev = true;
+    inp.rsPos = 1;
+  }
+  const outCount = Math.max(0, Math.ceil((N - inp.rsPos) / ratio));
+  const oL = new Float32Array(outCount);
+  const oR = new Float32Array(outCount);
+  let x = inp.rsPos;
+  for (let i = 0; i < outCount; i++) {
     const j = Math.floor(x);
     const f = x - j;
-    const j2 = Math.min(j + 1, L.length - 1);
-    oL[i] = L[j] * (1 - f) + L[j2] * f;
-    oR[i] = R[j] * (1 - f) + R[j2] * f;
+    const l0 = j === 0 ? inp.rsPrevL : L[j - 1];
+    const r0 = j === 0 ? inp.rsPrevR : R[j - 1];
+    const l1 = L[j];
+    const r1 = R[j];
+    oL[i] = l0 + (l1 - l0) * f;
+    oR[i] = r0 + (r1 - r0) * f;
+    x += ratio;
   }
-  inp.rsPhase = inp.rsPhase + n * ratio - L.length;
-  if (inp.rsPhase < 0) inp.rsPhase = 0;
+  inp.rsPrevL = L[N - 1];
+  inp.rsPrevR = R[N - 1];
+  inp.rsPos = x - N;
   return [oL, oR];
+}
+
+// Kayıt dışında da (ve kayıt öncesi 3–5 sn sağlık kontrolünde) gelen sesin gerçek saatle
+// tutarlılığını ve zaman damgası sıçramalarını sürekli ölçer.
+function recordInputHealth(inp, data, now) {
+  const frames = data.numberOfFrames;
+  const rate = data.sampleRate || SR;
+  inp.sampleRate = rate;
+  const durMs = (frames / rate) * 1000;
+  const capUs = Number.isFinite(data.timestamp) ? data.timestamp : null;
+  let jumpMs = 0;
+  if (inp.hLastCapUs !== null && capUs !== null) {
+    jumpMs = (capUs - inp.hLastCapUs) / 1000 - inp.hLastDurMs;
+  } else if (inp.hLastAt !== null) {
+    jumpMs = (now - inp.hLastAt) - inp.hLastDurMs;
+  }
+  inp.hLastCapUs = capUs;
+  inp.hLastDurMs = durMs;
+  inp.hLastAt = now;
+
+  if (healthProbe && inp.kind === 'mic') {
+    const hp = healthProbe;
+    hp.chunks++;
+    hp.gotMs += durMs;
+    hp.sampleRate = rate;
+    if (hp.firstCapUs === null && capUs !== null) hp.firstCapUs = capUs;
+    if (capUs !== null) {
+      hp.lastCapUs = capUs;
+      hp.lastDurUs = durMs * 1000;
+    }
+    if (hp.chunks > 1) {
+      if (jumpMs > hp.maxGapMs) hp.maxGapMs = jumpMs;
+      if (jumpMs > 45) hp.gapCount++;
+    }
+  }
+}
+
+function softCeiling(v) {
+  const a = Math.abs(v);
+  if (a <= 0.95) return v;
+  const s = 0.95 + 0.049 * Math.tanh((a - 0.95) / 0.049);
+  return v < 0 ? -s : s;
 }
 
 function handleInput(inp, data) {
   const now = performance.now();
   inp.lastArrival = now;
+  recordInputHealth(inp, data, now);
   const s = session;
   if (!s || !s.encoding) {
     inp.anchored = false;
@@ -921,6 +1169,16 @@ function handleInput(inp, data) {
   const dg = inp.diag;
   dg.chunks++;
   dg.frames += n;
+  inp.rateWinGotMs += (n / SR) * 1000;
+  if (cap !== null) {
+    if (dg.firstCapUs === null) dg.firstCapUs = cap;
+    if (dg.prevCapEndUs !== null) {
+      dg.maxPtsJumpMs = Math.max(dg.maxPtsJumpMs, (cap - dg.prevCapEndUs) / 1000);
+    }
+    dg.prevCapEndUs = cap + durUs;
+    dg.lastCapUs = cap;
+    dg.lastDurUs = durUs;
+  }
 
   if (!inp.anchored) {
     inp.useCap = cap !== null;
@@ -936,10 +1194,13 @@ function handleInput(inp, data) {
       dg.resyncs++;
       if (diff > 0) {
         dg.gapFrames += diff;
-        // Yakalamada gerçek kopma: kayıt sırasında arayüze hemen bildir.
-        if (rec && !rec.paused && diff > SR * 0.05 && now - (inp.lastGapPost || 0) > 3000) {
+        // Not: Windows masaüstü sesi (sys / WASAPI loopback) hiçbir uygulama ses çalmazken
+        // doğal olarak paket göndermez ve ses başladığında zaman damgası sıçrar; bu normal
+        // sessizliktir. Yalnızca mikrofondaki (mic) kopma gerçek ses kaybıdır.
+        if (inp.kind === 'mic' && rec && !rec.paused && diff > Math.round(SR * 0.045)
+            && now - (inp.lastGapPost || 0) > 2500) {
           inp.lastGapPost = now;
-          post('audio-gap', { ms: Math.round((diff / SR) * 1000), track: inp.kind });
+          post('audio-gap', { kind: 'pts-jump', ms: Math.round((diff / SR) * 1000), track: inp.kind });
         }
       }
       inp.nextPos = capPos;
@@ -958,8 +1219,13 @@ function handleInput(inp, data) {
 
 function mixWrite(track, kind, pos, L, R, n, gain, now) {
   const mx = track.mix;
-  if (mx.emitted === null) mx.emitted = pos;
-  const limit = mx.emitted + RING;
+  if (mx.emitted === null) {
+    mx.emitted = pos;
+    mx.clearedTo = pos + RING;
+    mx.minKept = pos;
+  }
+  advanceRingClear(mx);
+  const limit = mx.emitted + WRITE_HEAD;
   for (let i = 0; i < n; i++) {
     const p = pos + i;
     if (p < mx.emitted) continue; // çok geç geldi, o bölüm çoktan kodlandı
@@ -972,18 +1238,27 @@ function mixWrite(track, kind, pos, L, R, n, gain, now) {
   mx.lastAt[kind] = now;
 }
 
-function flushAudio(s, now = performance.now()) {
+function flushAudio(s, now = performance.now(), forceFinal = false) {
   for (const track of s.audio) {
     const mx = track.mix;
-    if (mx.emitted === null || track.enc.state !== 'configured') continue;
-    let ready = Infinity;
+    if (mx.emitted === null || track.recovering || !track.enc || track.enc.state !== 'configured') continue;
+    let ready = forceFinal ? -Infinity : Infinity;
     for (const kind of track.sources) {
       if (!inputs[kind] || mx.filled[kind] === undefined) continue;
+      if (forceFinal) {
+        ready = Math.max(ready, mx.filled[kind]);
+        continue;
+      }
       if (now - (mx.lastAt[kind] || 0) > LIVE_MS) continue; // sessiz/kopmuş girdi beklenmez
       ready = Math.min(ready, mx.filled[kind]);
     }
-    if (!Number.isFinite(ready)) continue;
-    while (ready - mx.emitted >= BLOCK) emitBlock(track, BLOCK);
+    if (!Number.isFinite(ready) || ready <= mx.emitted) continue;
+    while (ready - mx.emitted >= BLOCK) {
+      if (!emitBlock(track, BLOCK)) break;
+    }
+    if (forceFinal && ready > mx.emitted) {
+      emitBlock(track, ready - mx.emitted);
+    }
   }
 }
 
@@ -993,12 +1268,11 @@ function emitBlock(track, n) {
   const buf = new Float32Array(n * 2);
   for (let i = 0; i < n; i++) {
     const idx = (start + i) % RING;
-    buf[i] = mx.l[idx];
-    buf[n + i] = mx.r[idx];
-    mx.l[idx] = 0;
-    mx.r[idx] = 0;
+    buf[i] = softCeiling(mx.l[idx]);
+    buf[n + i] = softCeiling(mx.r[idx]);
   }
-  if (!mx.segOpen) {
+  const openedHere = !mx.segOpen;
+  if (openedHere) {
     track.segments.push({ enc: track.encTime, wall: (start / SR) * 1e6 });
     if (track.segments.length > 32) track.segments.shift();
     mx.segOpen = true;
@@ -1011,27 +1285,188 @@ function emitBlock(track, n) {
     timestamp: Math.round(track.encTime),
     data: buf,
   });
-  track.encTime += (n / SR) * 1e6;
-  mx.emitted += n;
   try {
     track.enc.encode(out);
+  } catch (err) {
+    if (openedHere) {
+      track.segments.pop();
+      mx.segOpen = false;
+    }
+    if (track.fail) track.fail(err);
+    return false;
   } finally {
     out.close();
   }
+  track.encTime += (n / SR) * 1e6;
+  track.emittedFrames += n;
+  track.encDiag.emittedFrames += n;
+  mx.emitted += n;
+  advanceRingClear(mx);
+  return true;
+}
+
+// Kayıt öncesi 3–5 sn otomatik ses sağlığı kontrolü: mikrofonun gerçek zamanlı örnek
+// hızını, zaman damgası sürekliliğini, RNNoise hazırlığını ve ses kodlayıcıyı doğrular.
+async function checkAudioHealth(msg) {
+  const durationMs = Math.max(800, Math.min(8000, Number(msg.durationMs) || 3200));
+  const micEnabled = !!msg.micEnabled;
+  const audioOrder = msg.audioOrder || ['aac', 'opus'];
+  const audioBitrate = Number(msg.audioBitrate) || 192000;
+
+  let encoderCodec = null;
+  let encoderOk = false;
+  let encoderErr = null;
+  try {
+    const picked = await pickAudioConfig(audioOrder, audioBitrate);
+    if (picked) {
+      encoderCodec = picked.codec;
+      let chunksOut = 0;
+      const testEnc = new AudioEncoder({
+        output() { chunksOut++; },
+        error(e) { encoderErr = e && e.message; },
+      });
+      testEnc.configure(picked.cfg);
+      // Windows MediaFoundation AAC en az 2 tam çerçeve (2x1024 örnek) olmadan flush() kabul etmez.
+      for (let k = 0; k < 2; k++) {
+        const silent = new AudioData({
+          format: 'f32-planar',
+          sampleRate: SR,
+          numberOfFrames: 1024,
+          numberOfChannels: 2,
+          timestamp: Math.round((k * 1024 * 1e6) / SR),
+          data: new Float32Array(1024 * 2),
+        });
+        try {
+          testEnc.encode(silent);
+        } finally {
+          silent.close();
+        }
+      }
+      const flushed = await withTimeout(testEnc.flush(), 2000);
+      encoderOk = flushed !== 'timeout' && testEnc.state === 'configured' && chunksOut > 0;
+      if (testEnc.state !== 'closed') testEnc.close();
+    }
+  } catch (err) {
+    encoderErr = err && err.message;
+    encoderOk = false;
+  }
+
+  if (!encoderOk) {
+    post('log', { level: 'error', message: `[ses-kontrol] ses kodlayıcı doğrulanamadı (${encoderCodec}): ${encoderErr || 'bilinmiyor'}` });
+    return { ok: false, code: 'audio-encoder-bad', encoderCodec };
+  }
+
+  if (!micEnabled) {
+    post('log', { level: 'info', message: `[ses-kontrol] mikrofon kapalı, kodlayıcı=${encoderCodec} -> SAĞLAM` });
+    return { ok: true, code: 'ok', micChecked: false, encoderCodec, ratioPct: 100 };
+  }
+
+  if (noiseStrong) {
+    await loadRnnoiseEntry();
+    if (inputs.mic && !inputs.mic.ns) attachDenoiser(inputs.mic);
+  }
+
+  const probe = {
+    startedAt: performance.now(),
+    chunks: 0,
+    gotMs: 0,
+    firstCapUs: null,
+    lastCapUs: null,
+    lastDurUs: 0,
+    maxGapMs: 0,
+    gapCount: 0,
+    sampleRate: inputs.mic ? inputs.mic.sampleRate : SR,
+    cancelled: false,
+    cancelResolve: null,
+  };
+  healthProbe = probe;
+  try {
+    await Promise.race([
+      waitMs(durationMs),
+      new Promise((resolve) => { probe.cancelResolve = resolve; }),
+    ]);
+  } finally {
+    if (healthProbe === probe) healthProbe = null;
+  }
+
+  if (probe.cancelled) return { ok: false, cancelled: true, code: 'cancelled' };
+
+  const wallMs = Math.max(1, performance.now() - probe.startedAt);
+  const ratio = probe.gotMs / wallMs;
+  const ratioPct = Math.round(ratio * 1000) / 10;
+  const tsSpanMs = probe.firstCapUs !== null && probe.lastCapUs !== null
+    ? (probe.lastCapUs - probe.firstCapUs + probe.lastDurUs) / 1000
+    : probe.gotMs;
+  const maxGapMs = Math.round(probe.maxGapMs);
+  const rnnoiseReady = noiseStrong ? !!(inputs.mic && inputs.mic.ns && inputs.mic.ns.ready) : null;
+
+  let code = 'ok';
+  if (!inputs.mic || probe.chunks < 5 || probe.gotMs < 200) code = 'mic-no-data';
+  else if (ratio < 0.96) code = 'mic-rate-low';
+  else if (maxGapMs > 65 || probe.gapCount > 1) code = 'mic-gaps';
+  else if (noiseStrong && !rnnoiseReady) code = 'rnnoise-failed';
+
+  const ok = code === 'ok';
+  post('log', {
+    level: ok ? 'info' : 'error',
+    message: `[ses-kontrol] süre=${(wallMs / 1000).toFixed(2)}s örnek=${(probe.gotMs / 1000).toFixed(2)}s `
+      + `(%${ratioPct}) tsAralık=${(tsSpanMs / 1000).toFixed(2)}s parça=${probe.chunks} `
+      + `enBüyükBoşluk=${maxGapMs}ms boşlukSayısı=${probe.gapCount} sr=${probe.sampleRate}Hz `
+      + `kodlayıcı=${encoderCodec}${noiseStrong ? ` rnnoise=${rnnoiseReady}` : ''} -> ${ok ? 'SAĞLAM' : code}`,
+  });
+
+  return {
+    ok,
+    code,
+    ratioPct,
+    gotMs: Math.round(probe.gotMs),
+    wallMs: Math.round(wallMs),
+    tsSpanMs: Math.round(tsSpanMs),
+    chunks: probe.chunks,
+    maxGapMs,
+    gapCount: probe.gapCount,
+    sampleRate: probe.sampleRate,
+    encoderCodec,
+    rnnoiseReady,
+  };
 }
 
 // Bir girdi tamamen susarsa (ör. mikrofon kablosu) öbürünü bekletmemek için düzenli boşalt;
-// kayıt sırasında açık mikrofondan 400 ms veri gelmezse uyar.
+// açık mikrofondan 400 ms veri gelmezse ya da 2 sn'lik pencerede örnek hızı gerçek saatin
+// %95'inin altına düşerse (ör. eski %65 hatası) kullanıcıyı anında uyar.
 setInterval(() => {
   const s = session;
   if (!s || !s.encoding) return;
   const now = performance.now();
   flushAudio(s, now);
   const mic = inputs.mic;
-  if (rec && !rec.paused && mic && gains.mic > 0 && mic.lastArrival && now - mic.lastArrival > LIVE_MS
-      && now - (mic.lastGapPost || 0) > 3000) {
-    mic.lastGapPost = now;
-    post('audio-gap', { ms: Math.round(now - mic.lastArrival), track: 'mic' });
+  if (!rec || rec.paused) {
+    if (mic) {
+      mic.rateWinGotMs = 0;
+      mic.rateWinSince = now;
+    }
+    return;
+  }
+  if (mic && gains.mic > 0) {
+    if (mic.lastArrival && now - mic.lastArrival > LIVE_MS && now - (mic.lastGapPost || 0) > 2500) {
+      mic.lastGapPost = now;
+      post('audio-gap', { kind: 'stall', ms: Math.round(now - mic.lastArrival), track: 'mic' });
+    }
+    const winMs = now - (mic.rateWinSince || now);
+    if (winMs >= 2000) {
+      const ratio = mic.rateWinGotMs / winMs;
+      if (ratio < 0.95 && now - (mic.lastGapPost || 0) > 2500) {
+        mic.lastGapPost = now;
+        post('audio-gap', {
+          kind: 'rate',
+          ratio: Math.round(ratio * 100),
+          ms: Math.round(winMs - mic.rateWinGotMs),
+          track: 'mic',
+        });
+      }
+      mic.rateWinGotMs = 0;
+      mic.rateWinSince = now;
+    }
   }
 }, 100);
 
@@ -1056,6 +1491,14 @@ function onAudioChunk(s, index, chunk) {
   const pkt = EncodedPacket.fromEncodedChunk(chunk).clone({
     timestamp: (chunk.timestamp - seg.enc + seg.wall) / 1e6,
   });
+  const ed = track.encDiag;
+  ed.pkts++;
+  ed.audioS += pkt.duration;
+  if (ed.firstPts === null) ed.firstPts = pkt.timestamp;
+  if (ed.prevEnd !== null) ed.maxGapMs = Math.max(ed.maxGapMs, (pkt.timestamp - ed.prevEnd) * 1000);
+  ed.prevEnd = pkt.timestamp + pkt.duration;
+  ed.lastPts = pkt.timestamp;
+  ed.lastDur = pkt.duration;
   s.bytes += pkt.byteLength;
   if (replay.enabled) (replay.audio[index] ||= []).push(pkt);
   if (rec) rec.pushAudio(index, pkt);
@@ -1100,6 +1543,7 @@ class Sink {
     this.lastEnd = 0;
     this.duration = 0;
     this.vStarted = false;
+    this.vLast = -1;
     this.aStarted = aSources.map(() => false);
     this.aLast = aSources.map(() => -1);
     this.pendingAudio = [];
@@ -1130,6 +1574,8 @@ class Sink {
       for (const [index, p] of queued) this.pushAudio(index, p);
     }
     const ts = pkt.timestamp - this.base - this.pausedTotal;
+    if (ts < 0 || ts < this.vLast) return;
+    this.vLast = ts + pkt.duration * 0.5;
     this.lastEnd = pkt.timestamp + pkt.duration;
     this.duration = ts + pkt.duration;
     const meta = this.vStarted ? undefined : { decoderConfig: this.s.vConfig };
@@ -1236,9 +1682,16 @@ async function createSink(s, fileId, container, crashSafe) {
 }
 
 async function flushEncoders(s) {
+  // Kodlayıcı kuyruklarını boşaltmadan önce karıştırıcıda bekleyen son ses örneklerini akıt;
+  // kurtarma sürüyorsa tamamlanmasını kısaca bekle.
+  const deadline = performance.now() + 2500;
+  while ((s.videoRecovering || s.audio.some((a) => a.recovering)) && performance.now() < deadline) {
+    await waitMs(50);
+  }
+  flushAudio(s, performance.now(), true);
   const jobs = [];
   if (s.venc && s.venc.state === 'configured') jobs.push(s.venc.flush());
-  for (const a of s.audio) if (a.enc.state === 'configured') jobs.push(a.enc.flush());
+  for (const a of s.audio) if (a.enc && a.enc.state === 'configured') jobs.push(a.enc.flush());
   await withTimeout(Promise.allSettled(jobs), 4000);
   s.forceKey = true;
 }
@@ -1322,11 +1775,12 @@ async function saveReplay(msg) {
 let statsLast = { time: 0, frames: 0, bytes: 0 };
 
 function startStats() {
-  // Kayıt sürerken 10 saniyede bir ses akışının sağlığını günlüğe yaz: gelen ses süresi
-  // geçen süreye eşit olmalı; değilse kayıp vardır ve nedeni buradan görülür.
+  // Kayıt sürerken 10 saniyede bir ses zincirinin her düğümünü (1: yakalama, 2: karıştırıcı,
+  // 3: kodlayıcı) gerçek saatle karşılaştırıp günlüğe yazar; kayıp olursa hangi düğümde
+  // oluştuğu doğrudan görülür.
   setInterval(() => {
     const s = session;
-    if (!s || !s.encoding || !rec) return;
+    if (!s || !s.encoding || !rec || rec.paused) return;
     const now = performance.now();
     for (const inp of Object.values(inputs)) {
       if (!inp) continue;
@@ -1334,18 +1788,39 @@ function startStats() {
       const wallS = (now - dg.since) / 1000;
       if (wallS < 1) continue;
       const got = dg.frames / SR;
+      const tsSpanS = dg.firstCapUs !== null && dg.lastCapUs !== null
+        ? (dg.lastCapUs - dg.firstCapUs + dg.lastDurUs) / 1e6
+        : got;
+      // Masaüstü sistem sesi (sys) hiçbir uygulama çalmazken paket göndermez; bu hata değildir.
+      const isBad = inp.kind === 'mic' && gains.mic > 0 && (got < wallS * 0.97 || dg.gapFrames > SR * 0.045);
       post('log', {
-        level: got < wallS * 0.97 || dg.gapFrames > SR * 0.05 ? 'error' : 'info',
-        message: `[ses ${inp.kind}] ${wallS.toFixed(1)} sn'de ${got.toFixed(2)} sn ses, ${dg.chunks} parça, `
-          + `yeniden hizalama ${dg.resyncs}, kopma ${Math.round((dg.gapFrames / SR) * 1000)} ms, `
-          + `en uzun gecikme ${Math.round(dg.maxLagMs)} ms${inp.ns ? ', RNNoise' : ''}`,
+        level: isBad ? 'error' : 'info',
+        message: `[yakalama ${inp.kind}] duvar=${wallS.toFixed(2)}s örnek=${got.toFixed(2)}s `
+          + `tsAralık=${tsSpanS.toFixed(2)}s parça=${dg.chunks} sr=${inp.sampleRate}Hz `
+          + `enBüyükTsSıçraması=${Math.round(dg.maxPtsJumpMs)}ms hizalama=${dg.resyncs} `
+          + `boşluk=${Math.round((dg.gapFrames / SR) * 1000)}ms gecikme=${Math.round(dg.maxLagMs)}ms`
+          + `${inp.ns ? ' RNNoise=açık' : ''}`,
       });
       inp.diag = newDiag();
     }
     for (const track of s.audio) {
-      if (track.enc.encodeQueueSize > 50) {
-        post('log', { level: 'error', message: `[ses ${track.name}] kodlayıcı kuyruğu ${track.enc.encodeQueueSize}` });
-      }
+      const ed = track.encDiag;
+      const wallS = (now - ed.since) / 1000;
+      if (wallS < 1) continue;
+      const emittedS = ed.emittedFrames / SR;
+      const ptsSpanS = ed.firstPts !== null && ed.lastPts !== null
+        ? (ed.lastPts - ed.firstPts + ed.lastDur)
+        : ed.audioS;
+      const q = track.enc && track.enc.state === 'configured' ? track.enc.encodeQueueSize : -1;
+      const bad = ed.maxGapMs > 45 || q > 50;
+      post('log', {
+        level: bad ? 'error' : 'info',
+        message: `[karıştırıcı->kodlayıcı ${track.name}] duvar=${wallS.toFixed(2)}s `
+          + `karıştırıcıÇıkışı=${emittedS.toFixed(2)}s kodlananSes=${ed.audioS.toFixed(2)}s `
+          + `ptsAralık=${ptsSpanS.toFixed(2)}s paket=${ed.pkts} enBüyükPtsBoşluk=${Math.round(ed.maxGapMs)}ms `
+          + `kodek=${s.aCodec} kurtarma=${track.recoveries} kuyruk=${q}`,
+      });
+      track.encDiag = newEncDiag();
     }
   }, 10000);
   setInterval(() => {
@@ -1443,6 +1918,13 @@ const handlers = {
   },
 
   'session-start': startSession,
+  'audio-health': checkAudioHealth,
+  'audio-health-cancel'() {
+    if (healthProbe) {
+      healthProbe.cancelled = true;
+      if (healthProbe.cancelResolve) healthProbe.cancelResolve();
+    }
+  },
   'prepare-video': scheduleVideoPreparation,
   'session-stop': stopSession,
   'rec-start': startRec,
